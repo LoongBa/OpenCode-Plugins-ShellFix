@@ -256,6 +256,10 @@ export const ShellFixPlugin: Plugin = async () => {
     }
 
     // ── 情况 B：普通命令 —— 仅注入编码前缀 ──
+    // 检测是否已包含编码前缀（bash 工具自身也会注入），避免重复嵌套
+    if (cmd.startsWith(ENCODING_PREFIX)) {
+      return;
+    }
     out.args.command = `${ENCODING_PREFIX}${cmd}`;
   },
   };
