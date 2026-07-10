@@ -100,6 +100,47 @@ function parseExportKV(kvBlock: string): string[] {
 }
 
 /**
+ * 对命令字符串中的 $env:KEY="VALUE" 赋值去重。
+ *
+ * bash 工具和 shell.env 可能各自注入同一批环境变量，
+ * 导致命令前缀出现两套重复的变量块。
+ * 此函数移除重复的赋值，只保留最后一次出现的值。
+ *
+ * 注意：仅匹配 $env: 后接单词字符的简单赋值模式，
+ * 不影响命令体中的 $env: 引用（如 echo $env:PATH）。
+ */
+function dedupeEnvAssignments(cmd: string): string {
+  // 匹配完整的 $env:KEY="VALUE"; 或 $env:KEY=VALUE; 赋值
+  const seen = new Map<string, { index: number; len: number }>();
+  const envRe = /\$env:(\w+)=(?:("(?:[^"\\]|\\.)*"|\S+?));/g;
+
+  // 第一遍：记录每个 KEY 的最后一个出现位置
+  for (let m = envRe.exec(cmd); m !== null; m = envRe.exec(cmd)) {
+    seen.set(m[1], { index: m.index, len: m[0].length });
+  }
+
+  if (seen.size === 0) return cmd;
+
+  // 第二遍：从右向左删除重复（保留最后出现的）
+  const removed = new Set<string>();
+  let result = cmd;
+  // 从后往前处理，这样删除前面的不会影响后面位置的准确性
+  const sorted = [...seen.entries()].sort(
+    (a, b) => b[1].index - a[1].index,
+  );
+  for (const [key, pos] of sorted) {
+    if (removed.has(key)) {
+      // 删掉前面的重复项（包括后面的 ; 或空格）
+      const after = result.slice(pos.index + pos.len);
+      result = result.slice(0, pos.index) + after.replace(/^[;\s]*/, "");
+    }
+    removed.add(key);
+  }
+
+  return result;
+}
+
+/**
  * 判断 shell 命令是否以 export 开头（忽略前导空白）。
  */
 const EXPORT_RE = /^\s*export\s+/;
@@ -126,7 +167,7 @@ const EXPORT_LINE_RE =
 //
 // 如果插件也注入，会与 bash 工具叠加产生重复嵌套。
 // 详见 README.md 中"重复嵌套防护"章节。
-// ====================================================================;
+// ====================================================================
 
 // ====================================================================
 // 插件元信息
@@ -138,28 +179,15 @@ const PLUGIN_VERSION = "1.1.0";
 const SPECIAL_CMD_RE = /^\s*[/#]shellfix\b/;
 
 // ====================================================================
-// 全局 CI 静默环境变量
+// 标识环境变量
 //
-// 预注入这些变量后，Agent 无需生成 export CI=true 等语句，
-// 直接从根本减少 export 出现的频率。
+// 只注入 SHELLFIX_VERSION 一个变量用于插件生效检测。
+// 其他 CI 变量（CI、GIT_EDITOR 等）由 bash 工具自行注入，
+// shell.env 如果也注入它们，bash 工具读取进程环境时会再生成
+// 一套 $env: 语句，导致命令前缀出现两套重复变量。
 // ====================================================================
 const CI_ENV_VARS: Record<string, string> = {
-  CI: "true",
-  SHELLFIX_VERSION: PLUGIN_VERSION,    // 用户可执行 echo $env:SHELLFIX_VERSION 确认插件生效
-  DEBIAN_FRONTEND: "noninteractive",
-  GIT_TERMINAL_PROMPT: "0",
-  GCM_INTERACTIVE: "never",
-  HOMEBREW_NO_AUTO_UPDATE: "1",
-  GIT_EDITOR: ":",
-  EDITOR: ":",
-  VISUAL: "",
-  GIT_SEQUENCE_EDITOR: ":",
-  GIT_MERGE_AUTOEDIT: "no",
-  GIT_PAGER: "cat",
-  PAGER: "cat",
-  npm_config_yes: "true",
-  PIP_NO_INPUT: "1",
-  YARN_ENABLE_IMMUTABLE_INSTALLS: "false",
+  SHELLFIX_VERSION: PLUGIN_VERSION,    // 唯一标识，用于确认插件生效
 };
 
 // ====================================================================
@@ -231,10 +259,12 @@ export const ShellFixPlugin: Plugin = async () => {
 
         const envAssignments = parseExportKV(kvBlock);
 
-        // 仅做 export → $env: 转换，bash 工具会自己加编码前缀
-        out.args.command = `${envAssignments.join("")}${
+        // 仅做 export → $env: 转换并去重，bash 工具会自己加编码前缀
+        let result = `${envAssignments.join("")}${
           suffix ? ` ${suffix}` : ""
         }`;
+        result = dedupeEnvAssignments(result);
+        out.args.command = result;
       }
       // else: export 行格式异常无法解析 — 保持原样，bash 工具会加编码前缀
       return;
@@ -248,7 +278,7 @@ export const ShellFixPlugin: Plugin = async () => {
         `Write-Host "  ├ Status: Active" -ForegroundColor Green;` +
         `Write-Host "  ├ Export syntax: $env:KEY=VAL auto-convert" -ForegroundColor Gray;` +
         `Write-Host "  ├ Encoding: UTF-8 forced prefix" -ForegroundColor Gray;` +
-        `Write-Host "  └ CI vars: ${Object.keys(CI_ENV_VARS).length} pre-injected" -ForegroundColor Gray;`;
+        `Write-Host "  └ SHELLFIX_VERSION injected via shell.env" -ForegroundColor Gray;`;
       return;
     }
 

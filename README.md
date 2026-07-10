@@ -31,8 +31,8 @@ Write-Output "你好世界"
 
 | 钩子 | 时机 | 解决 |
 |------|------|------|
-| `shell.env` | 进程初始化 | 预注入 18 个 CI 全局环境变量（含 `SHELLFIX_VERSION`） |
-| `tool.execute.before` | 每条命令前 | ① 强制 UTF-8 编码 ② export → `$env:` 转换 |
+| `shell.env` | 进程初始化 | 注入 `SHELLFIX_VERSION` 环境变量（仅此一项） |
+| `tool.execute.before` | 每条命令前 | ① export → `$env:` 转换 ② 去重
 
 **工作原理**：Agent 输出 `export FOO=bar` → 插件自动拦截 → 转为 `$env:FOO="bar";` → PowerShell 无痛执行。
 
@@ -87,23 +87,24 @@ $env:PATH="/usr/local/bin/`$PATH";
 
 ## 重复嵌套防护
 
-**根因**：插件和 bash 工具各自注入编码前缀，形成叠加：
+**根因**：插件和 bash 工具各自注入编码前缀和 CI 变量，形成叠加：
 
 ```
-Agent → [插件] 追加 ENCODING_PREFIX → [bash 工具] 再追加 ENCODING_PREFIX + $env: → 双份
+# shell.env 注入 18 个变量 → bash 工具读取环境生成一套 $env:
+# bash 工具自身硬编码再注入同一套 → 命令前缀出现两套重复变量
 ```
 
-**v1.1.0 修复**：插件中完全移除 ENCODING_PREFIX 注入。bash 工具已包办编码前缀 + `$env:` CI 变量，插件只需做 export → `$env:` 转换。
+**v1.1.0 修复**：
 
-## 自动注入环境变量（辅助）
+1. **移除插件端 ENCODING_PREFIX** — bash 工具自己处理编码
+2. **shell.env 只留 SHELLFIX_VERSION** — 去掉 17 个 CI 变量，避免 bash 工具读取环境时重复生成
+3. **$env: 赋值去重** — `dedupeEnvAssignments()` 函数对同一命令中重复的 `$env:KEY` 移除前面项，保留最后赋值
 
-插件通过 `shell.env` 钩子在进程初始化时注入 18 个 CI 环境变量。主要作用：
+## 自动注入环境变量
 
-1. **预防**：`$env:CI`、`$env:GIT_EDITOR` 等变量在进程启动时已存在，Agent 感知后间接减少 `export` 生成
-2. **标识**：`$env:SHELLFIX_VERSION` 作为"插件已生效"的检验标记
-3. **环境一致**：确保 shell 进程中变量始终可用，不依赖 Agent 的显式设置
+插件通过 `shell.env` 钩子只注入 `$env:SHELLFIX_VERSION`（版本标识）。
 
-> ⚠️ **注意**：bash 工具有独立的命令包装机制，仍会在命令字符串前缀写入这些变量。`shell.env` 是进程级注入，不影响命令字符串，因此命令中仍会出现 `$env:CI="true";...` 长串。这是 bash 工具的行为，插件无法消除。
+> ⚠️ **其他 CI 变量**（`CI`、`GIT_EDITOR` 等）由 bash 工具自行注入，属于 bash 工具的内置行为，插件不会额外注入。
 
 ## 额外功能
 
@@ -124,7 +125,7 @@ Agent → [插件] 追加 ENCODING_PREFIX → [bash 工具] 再追加 ENCODING_P
   ├ Status: Active
   ├ Export syntax: $env:KEY=VAL auto-convert
   ├ Encoding: UTF-8 forced prefix
-  └ CI vars: 18 pre-injected
+  └ SHELLFIX_VERSION injected via shell.env
 ```
 
 ### 环境变量 `SHELLFIX_VERSION`
@@ -136,8 +137,8 @@ Agent → [插件] 追加 ENCODING_PREFIX → [bash 工具] 再追加 ENCODING_P
 本方案源于对原始设计的技术审查。审查发现原方案的 `shell.env` 用法基于虚构的 API 字段（`preCommand`、`vars`），实际 API 能力边界不同。本仓库提供经过真实 API 验证的完整修复方案。
 
 后续迭代新增功能：
-- **重复嵌套防护**（v1.1.0）：移除插件端 ENCODING_PREFIX，bash 工具自行处理编码前缀
-- **自动注入环境变量**：通过 `shell.env` 进程级注入 18 个 CI 变量，减少 Agent 生成 `export`
+- **重复嵌套防护**（v1.1.0）：移除插件端 ENCODING_PREFIX 和冗余 CI 变量注入，新增 `$env:` 去重
+- **自动注入环境变量**：只注入 `SHELLFIX_VERSION`，其余 CI 变量由 bash 工具自行处理
 
 详见 [`docs/01-方案评估.md`](docs/01-方案评估.md) 了解原始问题，和 [`docs/02-完整修复方案.md`](docs/02-完整修复方案.md) 了解基础设计。
 
