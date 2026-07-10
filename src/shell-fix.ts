@@ -1,14 +1,19 @@
 /**
  * ShellFixPlugin
  * ==============
- * OpenCode 原生 TS 插件 —— 自动解决 Windows PowerShell 下两个顽固问题：
+ * OpenCode 原生 TS 插件 —— Windows PowerShell 三大修复功能：
  *
- * 1. Agent 输出 Linux `export` 语法 → 自动转换为 PowerShell `$env:KEY="VAL"`
- * 2. 非交互子进程不加载 $PROFILE → 注入编码配置 + 预置 CI 全局环境变量
+ * 1. 中文不乱码 → 自动注入 $OutputEncoding + [Console]::OutputEncoding（tool.execute.before）
+ * 2. export → $env:KEY="VAL" 转换（tool.execute.before）
+ * 3. Git 免交互 → shell.env 进程级注入 CI 环境变量，无需写进命令字符串
  *
- * 依赖两个原生钩子，解耦两个需求：
+ * 依赖两个原生钩子，解耦三个需求：
  *   - shell.env         → 进程初始化时注入全局环境变量（只能设 env，不能拼命令）
- *   - tool.execute.before → 每条命令执行前拦截并转换 export 语法、前置编码脚本
+ *   - tool.execute.before → 每条命令执行前拦截并转换 export 语法、注入编码前缀
+ *
+ * 注意：如果你的配置中启用了 oh-my-openagent 的 non-interactive-env 插件，
+ * 建议禁用该插件，因为 ShellFix 的 shell.env 已覆盖同样功能，
+ * 且不会将 $env: 变量写进命令字符串，避免命令前缀膨大。
  *
  * 安装方式：
  *   项目级： 复制到 .opencode/plugins/shell-fix.ts（自动发现）
@@ -175,21 +180,37 @@ const ENCODING_PREFIX =
 // 插件元信息
 // ====================================================================
 const PLUGIN_NAME = "ShellFix";
-const PLUGIN_VERSION = "1.1.0";
+const PLUGIN_VERSION = "1.2.0";
 
 // 特殊指令匹配：输入 #shellfix 或 /shellfix 触发状态显示
 const SPECIAL_CMD_RE = /^\s*[/#]shellfix\b/;
 
 // ====================================================================
-// 标识环境变量
+// 非交互环境变量（shell.env 进程级注入）
 //
-// 只注入 SHELLFIX_VERSION 一个变量用于插件生效检测。
-// 其他 CI 变量（CI、GIT_EDITOR 等）由 bash 工具自行注入，
-// shell.env 如果也注入它们，bash 工具读取进程环境时会再生成
-// 一套 $env: 语句，导致命令前缀出现两套重复变量。
+// 通过 shell.env 钩子注入到进程环境，子进程自动继承。
+// 不需要写进命令字符串，不会产生 $env:CI="true" 等前缀。
+//
+// 这些变量覆盖 oh-my-openagent 的 non-interactive-env 插件功能，
+// 但用 shell.env 而非 tool.execute.before，避免命令字符串膨大。
 // ====================================================================
 const CI_ENV_VARS: Record<string, string> = {
+  CI: "true",
   SHELLFIX_VERSION: PLUGIN_VERSION,    // 唯一标识，用于确认插件生效
+  DEBIAN_FRONTEND: "noninteractive",
+  GIT_TERMINAL_PROMPT: "0",
+  GCM_INTERACTIVE: "never",
+  HOMEBREW_NO_AUTO_UPDATE: "1",
+  GIT_EDITOR: ":",
+  EDITOR: ":",
+  VISUAL: "",
+  GIT_SEQUENCE_EDITOR: ":",
+  GIT_MERGE_AUTOEDIT: "no",
+  GIT_PAGER: "cat",
+  PAGER: "cat",
+  npm_config_yes: "true",
+  PIP_NO_INPUT: "1",
+  YARN_ENABLE_IMMUTABLE_INSTALLS: "false",
 };
 
 // ====================================================================
@@ -199,7 +220,7 @@ const CI_ENV_VARS: Record<string, string> = {
 export const ShellFixPlugin: Plugin = async () => {
   console.log(
     `[${PLUGIN_NAME}] v${PLUGIN_VERSION} loaded — ` +
-      `Windows PowerShell export/encoding fix active`
+      `encoding fix | export conversion | ${Object.keys(CI_ENV_VARS).length} non-interactive env vars`
   );
 
   return {
@@ -230,12 +251,10 @@ export const ShellFixPlugin: Plugin = async () => {
   // 时机：每次工具调用前触发。
   // 能力：修改 output.args 来改写工具的参数。
   //
-  //  两个职责：
-  //   1. 将行首 export 语法自动转换为 $env:KEY="VAL"（bash 工具负责编码前缀）
-  //   2. /shellfix 指令显示状态
-  //
-  //  注意：插件不再注入 ENCODING_PREFIX，由 bash 工具自行处理，
-  //  避免两者叠加产生重复嵌套。
+  //  三个职责：
+  //   1. 注入 ENCODING_PREFIX → 中文不乱码
+  //   2. 将行首 export 语法自动转换为 $env:KEY="VAL"
+  //   3. /shellfix 指令显示状态
   //
   // 真实 API 签名（@opencode-ai/plugin v1.17.13）：
   //   "tool.execute.before"?:
@@ -277,10 +296,9 @@ export const ShellFixPlugin: Plugin = async () => {
       out.args.command =
         `Write-Host "";` +
         `Write-Host "[${PLUGIN_NAME}] v${PLUGIN_VERSION}" -ForegroundColor Cyan;` +
-        `Write-Host "  ├ Status: Active" -ForegroundColor Green;` +
-        `Write-Host "  ├ Export syntax: $env:KEY=VAL auto-convert" -ForegroundColor Gray;` +
-        `Write-Host "  ├ Encoding: UTF-8 forced prefix" -ForegroundColor Gray;` +
-        `Write-Host "  └ SHELLFIX_VERSION injected via shell.env" -ForegroundColor Gray;`;
+        `Write-Host "  ├ 中文不乱码: UTF-8 encoding prefix" -ForegroundColor Green;` +
+        `Write-Host "  ├ export->` + "`$env: auto-convert" + `" -ForegroundColor Green;` +
+        `Write-Host "  └ Git 免交互: ${Object.keys(CI_ENV_VARS).length} env vars via shell.env" -ForegroundColor Green;`;
       return;
     }
 
