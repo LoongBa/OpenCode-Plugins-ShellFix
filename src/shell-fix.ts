@@ -256,8 +256,15 @@ export const ShellFixPlugin: Plugin = async () => {
     }
 
     // ── 情况 B：普通命令 —— 仅注入编码前缀 ──
-    // 检测是否已包含编码前缀（bash 工具自身也会注入），避免重复嵌套
+    // 检测是否已包含编码前缀（bash 工具自身也会注入），避免重复嵌套。
+    // 使用 startsWith 而非 includes，因为 startsWith 能精准区分"已在命令前"
+    // 与"命令体内恰好用到了同一变量名"（后者不应跳过）。
+    // 同时检测 $env:CI= 等 bash 工具注入的 CI 变量块，
+    // 因为 bash 工具会在 ENCODING_PREFIX 后追加这些变量。
     if (cmd.startsWith(ENCODING_PREFIX)) {
+      return;
+    }
+    if (cmd.includes("$env:CI=\"true\"")) {
       return;
     }
     out.args.command = `${ENCODING_PREFIX}${cmd}`;
