@@ -158,16 +158,18 @@ const EXPORT_LINE_RE =
   /^\s*export\s+((?:\w+=(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\S+)\s*)+)(.*)$/s;
 
 // ====================================================================
-// 编码前置说明
+// 编码前置脚本
 //
-// 插件不再注入编码前缀，由 bash 工具负责。
-// bash 工具包装每条命令时会自动添加：
-//   $OutputEncoding=[Text.UTF8Encoding]::new($false);
-//   [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false);
+// PowerShell 非交互子进程默认输出编码为当前系统代码页（Windows 常见 GBK），
+// 导致中文乱码。每次命令前强制设置 $OutputEncoding 和 [Console]::OutputEncoding
+// 为 UTF-8 确保管道和控制台输出正确。
 //
-// 如果插件也注入，会与 bash 工具叠加产生重复嵌套。
-// 详见 README.md 中"重复嵌套防护"章节。
+// 注意：bash 工具不负责这个，必须由插件注入。
+// 为了防止与 bash 工具叠加重复，注入前检测 startsWith。
 // ====================================================================
+const ENCODING_PREFIX =
+  "$OutputEncoding=[Text.UTF8Encoding]::new($false);" +
+  "[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false);";
 
 // ====================================================================
 // 插件元信息
@@ -259,8 +261,8 @@ export const ShellFixPlugin: Plugin = async () => {
 
         const envAssignments = parseExportKV(kvBlock);
 
-        // 仅做 export → $env: 转换并去重，bash 工具会自己加编码前缀
-        let result = `${envAssignments.join("")}${
+        // 仅做 export → $env: 转换并去重，bash 工具不负责编码
+        let result = `${ENCODING_PREFIX}${envAssignments.join("")}${
           suffix ? ` ${suffix}` : ""
         }`;
         result = dedupeEnvAssignments(result);
@@ -282,9 +284,13 @@ export const ShellFixPlugin: Plugin = async () => {
       return;
     }
 
-    // ── 情况 B：普通命令 —— 不做任何修改 ──
-    // bash 工具会自己注入编码前缀 + $env: CI 变量，插件无需重复
-    // export 转换、special 指令已在上面处理
+    // ── 情况 B：普通命令 —— 注入编码前缀 ──
+    // bash 工具不负责编码，需要插件注入 $OutputEncoding + [Console]::OutputEncoding。
+    // 用 startsWith 检测避免已存在时重复嵌套（bash 工具可能在极少数场景下也加）。
+    if (cmd.startsWith(ENCODING_PREFIX)) {
+      return;
+    }
+    out.args.command = `${ENCODING_PREFIX}${cmd}`;
   },
   };
 };
