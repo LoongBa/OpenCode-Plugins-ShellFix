@@ -1,8 +1,8 @@
-# OpenCode Plugins AutoFix 🔧
+# OpenCode Plugins ShellFix 🔧
 
 **自动解决 Windows PowerShell 下 OpenCode 的两个顽固问题：export 语法不兼容 + 中文乱码。**
 
-当前版本：**v1.1.0**
+当前版本：**v1.1.0**（含重复嵌套防护）
 
 ## 痛点
 
@@ -65,9 +65,9 @@ OpenCode-Plugins-ShellFix/
 ├── src/
 │   └── shell-fix.ts           # 插件主代码 — 可直接部署到 .opencode/plugins/
 └── docs/
-    ├── 01-方案评估.md          # 对原设计方案的技术审查报告
-    ├── 02-完整修复方案.md       # 完整的修正后设计方案
-    └── 03-安装与使用.md        # 安装、验证、FAQ、卸载指南
+    ├── 01-方案评估.md          # v1.0 — 原设计方案技术审查（当前版本已有大幅优化）
+    ├── 02-完整修复方案.md       # v1.0 — 修正后设计方案
+    └── 03-安装与使用.md        # v1.0 — 安装、验证、FAQ、卸载指南（⚠️ 部分内容已落后）
 ```
 
 ## 核心能力
@@ -84,6 +84,26 @@ $OutputEncoding=[Text.UTF8Encoding]::new($false);
 $env:FOO="bar";$env:DB_HOST="localhost";$env:DB_PORT="5432";
 $env:PATH="/usr/local/bin/`$PATH";
 ```
+
+## 自动注入环境变量节省命令长度
+
+bash 工具每次执行命令都会在命令前注入一长串 `$env:CI="true";$env:DEBIAN_FRONTEND="noninteractive";...`（18 个变量）。插件通过 `shell.env` 钩子在**进程初始化时**一次性注入这些变量，此后进程内所有命令都天然拥有这些环境变量。
+
+**节省效果**：命令前的 `$env:CI="true";$env:DEBIAN_FRONTEND="noninteractive";...` 长串（约 400 字符）完全消失，只保留编码前缀 `$OutputEncoding=...;[Console]::OutputEncoding=...`（约 100 字符）。
+
+```
+# 无插件时（bash 工具注入）
+$OutputEncoding=...;[Console]::OutputEncoding=...;$env:CI="true";$env:DEBIAN_FRONTEND="noninteractive";...$env:YARN_ENABLE_IMMUTABLE_INSTALLS="false"; git add -A
+
+# 有插件后（shell.env 进程级注入，不写进命令）
+$OutputEncoding=...;[Console]::OutputEncoding=...; git add -A
+```
+
+## 重复嵌套防护
+
+bash 工具自身也会在命令前注入编码前缀 + `$env:` CI 变量。旧版本每次注入，多步命令（`;` 分隔）执行后会产生成百上千倍的重复前缀。
+
+**v1.1.0 修复**：在注入前检测 `cmd.startsWith(ENCODING_PREFIX)` 和 `cmd.includes("$env:CI=\"true\"")`，已存在则跳过，彻底杜绝重复嵌套。
 
 ## 额外功能
 
@@ -115,7 +135,11 @@ $env:PATH="/usr/local/bin/`$PATH";
 
 本方案源于对原始设计的技术审查。审查发现原方案的 `shell.env` 用法基于虚构的 API 字段（`preCommand`、`vars`），实际 API 能力边界不同。本仓库提供经过真实 API 验证的完整修复方案。
 
-详见 [`docs/01-方案评估.md`](docs/01-方案评估.md) 了解全部问题，和 [`docs/02-完整修复方案.md`](docs/02-完整修复方案.md) 了解修正细节。
+后续迭代新增功能：
+- **重复嵌套防护**（v1.1.0）：检测 bash 工具已注入编码前缀或 `$env:CI` 时跳过，避免累加
+- **自动注入环境变量**：通过 `shell.env` 进程级注入 18 个 CI 变量，减少命令前缀中 400+ 字符
+
+详见 [`docs/01-方案评估.md`](docs/01-方案评估.md) 了解原始问题，和 [`docs/02-完整修复方案.md`](docs/02-完整修复方案.md) 了解基础设计。
 
 ## 兼容性
 
