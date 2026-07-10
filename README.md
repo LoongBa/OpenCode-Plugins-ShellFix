@@ -101,19 +101,18 @@ cp src/shell-fix.ts ~/.config/opencode/plugins/
 
 ## 禁用 oh-my-openagent 的 non-interactive-env 插件
 
-ShellFix 已通过 `shell.env` 覆盖 Git 免交互功能，且不产生命令前缀。建议禁用 oh-my-openagent 的 `non-interactive-env` 插件以避免重复：
+ShellFix 已通过 `shell.env` 覆盖 Git 免交互功能，且不产生命令前缀。建议禁用 oh-my-openagent 的 `non-interactive-env` 插件以避免命令字符串中出现重复的 `$env:CI="true"` 前缀。
 
-在 `opencode.json` 中找到 plugin 配置，从 oh-my-openagent 的 hooks 列表中移除 `nonInteractiveEnv`，或在 oh-my-openagent 的配置文件中设置：
+在 `~/.config/opencode/oh-my-openagent.jsonc` 中加：
 
-```json
+```jsonc
 {
-  "omo": {
-    "hooks": {
-      "nonInteractiveEnv": false
-    }
-  }
+  "disabled_hooks": ["non-interactive-env"],   // 禁用命令前缀式注入
+  // ... 原有配置
 }
 ```
+
+重启 OpenCode 生效。
 
 ## 验证安装
 
