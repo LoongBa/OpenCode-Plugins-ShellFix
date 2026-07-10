@@ -294,11 +294,12 @@ export const ShellFixPlugin: Plugin = async () => {
     // ── 情况 Z：特殊指令 #shellfix / /shellfix —— 显示版本状态 ──
     if (SPECIAL_CMD_RE.test(cmd)) {
       out.args.command =
+        `${ENCODING_PREFIX}` +
         `Write-Host "";` +
         `Write-Host "[${PLUGIN_NAME}] v${PLUGIN_VERSION}" -ForegroundColor Cyan;` +
-        `Write-Host "  ├ 中文不乱码: UTF-8 encoding prefix" -ForegroundColor Green;` +
-        `Write-Host "  ├ export->` + "`$env: auto-convert" + `" -ForegroundColor Green;` +
-        `Write-Host "  └ Git 免交互: ${Object.keys(CI_ENV_VARS).length} env vars via shell.env" -ForegroundColor Green;`;
+        `Write-Host "  \u251c 中文不乱码: UTF-8 encoding prefix" -ForegroundColor Green;` +
+        `Write-Host "  \u251c export->` + "`$env: auto-convert" + `" -ForegroundColor Green;` +
+        `Write-Host "  \u2514 Git 免交互: ${Object.keys(CI_ENV_VARS).length} env vars via shell.env" -ForegroundColor Green;`;
       return;
     }
 
