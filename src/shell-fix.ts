@@ -117,20 +117,16 @@ const EXPORT_LINE_RE =
   /^\s*export\s+((?:\w+=(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\S+)\s*)+)(.*)$/s;
 
 // ====================================================================
-// 编码前置脚本
+// 编码前置说明
 //
-// PowerShell 非交互子进程默认输出编码为当前系统代码页（Windows 常见 GBK），
-// 导致中文乱码。每次命令前强制设置 $OutputEncoding 和 [Console]::OutputEncoding
-// 为 UTF-8 确保管道和控制台输出正确。
+// 插件不再注入编码前缀，由 bash 工具负责。
+// bash 工具包装每条命令时会自动添加：
+//   $OutputEncoding=[Text.UTF8Encoding]::new($false);
+//   [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false);
 //
-// 为什么不用 . $PROFILE：
-//   - PROFILE 含交互元素（prompt、颜色）会污染命令输出
-//   - PROFILE 加载模块（oh-my-posh、posh-git）增加数百毫秒延迟
-//   - 非交互环境部分 PROFILE 命令会报错中断
-// ====================================================================
-const ENCODING_PREFIX =
-  "$OutputEncoding=[Text.UTF8Encoding]::new($false);" +
-  "[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false);";
+// 如果插件也注入，会与 bash 工具叠加产生重复嵌套。
+// 详见 README.md 中"重复嵌套防护"章节。
+// ====================================================================;
 
 // ====================================================================
 // 插件元信息
@@ -204,9 +200,12 @@ export const ShellFixPlugin: Plugin = async () => {
   // 时机：每次工具调用前触发。
   // 能力：修改 output.args 来改写工具的参数。
   //
-  // 两个职责：
-  //   1. 前缀注入 PowerShell 编码配置
-  //   2. 将行首 export 语法自动转换为 $env:KEY="VAL"
+  //  两个职责：
+  //   1. 将行首 export 语法自动转换为 $env:KEY="VAL"（bash 工具负责编码前缀）
+  //   2. /shellfix 指令显示状态
+  //
+  //  注意：插件不再注入 ENCODING_PREFIX，由 bash 工具自行处理，
+  //  避免两者叠加产生重复嵌套。
   //
   // 真实 API 签名（@opencode-ai/plugin v1.17.13）：
   //   "tool.execute.before"?:
@@ -232,14 +231,12 @@ export const ShellFixPlugin: Plugin = async () => {
 
         const envAssignments = parseExportKV(kvBlock);
 
-        // 组装：编码前缀 + 环境赋值 + 剩余命令
-        out.args.command = `${ENCODING_PREFIX}${envAssignments.join("")}${
+        // 仅做 export → $env: 转换，bash 工具会自己加编码前缀
+        out.args.command = `${envAssignments.join("")}${
           suffix ? ` ${suffix}` : ""
         }`;
-      } else {
-        // export 行格式异常无法解析：注入编码前缀，保留原命令
-        out.args.command = `${ENCODING_PREFIX}${cmd}`;
       }
+      // else: export 行格式异常无法解析 — 保持原样，bash 工具会加编码前缀
       return;
     }
 
@@ -255,13 +252,9 @@ export const ShellFixPlugin: Plugin = async () => {
       return;
     }
 
-    // ── 情况 B：普通命令 —— 仅注入编码前缀 ──
-    // 检测是否已包含编码前缀（bash 工具自身也会注入），避免重复嵌套。
-    // 只用 startsWith，因为 bash 工具总是将 ENCODING_PREFIX 放在命令最前面。
-    if (cmd.startsWith(ENCODING_PREFIX)) {
-      return;
-    }
-    out.args.command = `${ENCODING_PREFIX}${cmd}`;
+    // ── 情况 B：普通命令 —— 不做任何修改 ──
+    // bash 工具会自己注入编码前缀 + $env: CI 变量，插件无需重复
+    // export 转换、special 指令已在上面处理
   },
   };
 };
