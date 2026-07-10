@@ -114,7 +114,7 @@ const EXPORT_RE = /^\s*export\s+/;
  * 注意：仅匹配行首的 export，不会转换命令中间或注释中的 export。
  */
 const EXPORT_LINE_RE =
-  /^export\s+((?:\w+=(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\S+)\s*)+)(.*)$/s;
+  /^\s*export\s+((?:\w+=(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\S+)\s*)+)(.*)$/s;
 
 // ====================================================================
 // 编码前置脚本
@@ -257,14 +257,8 @@ export const ShellFixPlugin: Plugin = async () => {
 
     // ── 情况 B：普通命令 —— 仅注入编码前缀 ──
     // 检测是否已包含编码前缀（bash 工具自身也会注入），避免重复嵌套。
-    // 使用 startsWith 而非 includes，因为 startsWith 能精准区分"已在命令前"
-    // 与"命令体内恰好用到了同一变量名"（后者不应跳过）。
-    // 同时检测 $env:CI= 等 bash 工具注入的 CI 变量块，
-    // 因为 bash 工具会在 ENCODING_PREFIX 后追加这些变量。
+    // 只用 startsWith，因为 bash 工具总是将 ENCODING_PREFIX 放在命令最前面。
     if (cmd.startsWith(ENCODING_PREFIX)) {
-      return;
-    }
-    if (cmd.includes("$env:CI=\"true\"")) {
       return;
     }
     out.args.command = `${ENCODING_PREFIX}${cmd}`;

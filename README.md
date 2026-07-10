@@ -85,19 +85,15 @@ $env:FOO="bar";$env:DB_HOST="localhost";$env:DB_PORT="5432";
 $env:PATH="/usr/local/bin/`$PATH";
 ```
 
-## 自动注入环境变量节省命令长度
+## 自动注入环境变量（辅助）
 
-bash 工具每次执行命令都会在命令前注入一长串 `$env:CI="true";$env:DEBIAN_FRONTEND="noninteractive";...`（18 个变量）。插件通过 `shell.env` 钩子在**进程初始化时**一次性注入这些变量，此后进程内所有命令都天然拥有这些环境变量。
+插件通过 `shell.env` 钩子在 shell 进程初始化时注入 18 个 CI 环境变量。主要作用：
 
-**节省效果**：命令前的 `$env:CI="true";$env:DEBIAN_FRONTEND="noninteractive";...` 长串（约 400 字符）完全消失，只保留编码前缀 `$OutputEncoding=...;[Console]::OutputEncoding=...`（约 100 字符）。
+1. **预防**：`$env:CI`、`$env:GIT_EDITOR` 等变量在进程启动时已存在，Agent 感知后间接减少 `export` 生成
+2. **标识**：`$env:SHELLFIX_VERSION` 作为"插件已生效"的检验标记
+3. **环境一致**：确保 shell 进程中变量始终可用，不依赖 Agent 的显式设置
 
-```
-# 无插件时（bash 工具注入）
-$OutputEncoding=...;[Console]::OutputEncoding=...;$env:CI="true";$env:DEBIAN_FRONTEND="noninteractive";...$env:YARN_ENABLE_IMMUTABLE_INSTALLS="false"; git add -A
-
-# 有插件后（shell.env 进程级注入，不写进命令）
-$OutputEncoding=...;[Console]::OutputEncoding=...; git add -A
-```
+> ⚠️ **注意**：bash 工具有自己独立的命令包装机制，依然会在每条命令前注入 `$env:CI="true"` 等变量。`shell.env` 的实际节省取决于 OpenCode 具体实现，当前版本主要价值在于标识和辅助预防，而非彻底消除前缀。
 
 ## 重复嵌套防护
 
