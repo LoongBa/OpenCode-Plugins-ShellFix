@@ -314,6 +314,28 @@ export function listTagTree(parent?: string): string[] {
   return result.sort();
 }
 
+/** 按时间倒序获取笔记（最新在前） */
+export function listNotesByTime(limit?: number, since?: string): NoteEntry[] {
+  const notes = listNotes();
+  const filtered = since
+    ? notes.filter((n) => n.created >= since)
+    : notes;
+  return filtered
+    .sort((a, b) => b.created.localeCompare(a.created))
+    .slice(0, limit ?? filtered.length);
+}
+
+/** 按标签前缀 + 时间过滤获取笔记 */
+export function queryNotesByTime(prefix: string, limit?: number, since?: string): NoteEntry[] {
+  const notes = queryNotes(prefix);
+  const filtered = since
+    ? notes.filter((n) => n.created >= since)
+    : notes;
+  return filtered
+    .sort((a, b) => b.created.localeCompare(a.created))
+    .slice(0, limit ?? filtered.length);
+}
+
 // ====================================================================
 // 远程仓库同步
 // ====================================================================

@@ -67,6 +67,19 @@ export interface PluginState {
   cmdRules: CmdRules;
   auto: AutoState;
   sync: SyncConfig;
+  kickme: KickmeRule[];
+}
+
+export interface KickmeRule {
+  id: string;
+  label: string;
+  enabled: boolean;
+  matchType: "keyword" | "regex";
+  pattern: string;
+  title: string;
+  message: string;
+  sound: boolean;
+  scope: "user" | "llm" | "both";
 }
 
 /** 所有命令规则的元信息，供 ui 渲染 */
@@ -125,6 +138,7 @@ const DEFAULT_STATE: PluginState = {
     lastSyncCommit: "",
     lastSyncAt: "",
   },
+  kickme: [],
 };
 
 // ====================================================================
@@ -295,6 +309,70 @@ export function setSyncConfig(cfg: Partial<SyncConfig>): void {
   const s = loadState();
   s.sync = { ...s.sync, ...cfg };
   saveState(s);
+}
+
+// ====================================================================
+// Kickme 规则管理
+// ====================================================================
+
+let _kickmeIdCounter = 0;
+
+function _seedKickmeIdCounter(): void {
+  const s = loadState();
+  let max = 0;
+  for (const r of s.kickme) {
+    const m = r.id.match(/^km_(\d+)_/);
+    if (m) {
+      const n = parseInt(m[1], 10);
+      if (n > max) max = n;
+    }
+  }
+  _kickmeIdCounter = max;
+}
+
+/** 获取所有 kickme 规则 */
+export function getKickmeRules(): KickmeRule[] {
+  return [...loadState().kickme];
+}
+
+/** 添加 kickme 规则 */
+export function addKickmeRule(rule: Omit<KickmeRule, "id">): string {
+  const s = loadState();
+  if (_kickmeIdCounter === 0) _seedKickmeIdCounter();
+  const id = `km_${++_kickmeIdCounter}_${Date.now()}`;
+  s.kickme.push({ ...rule, id });
+  saveState(s);
+  return id;
+}
+
+/** 删除 kickme 规则 */
+export function removeKickmeRule(id: string): boolean {
+  const s = loadState();
+  const idx = s.kickme.findIndex((r) => r.id === id);
+  if (idx === -1) return false;
+  s.kickme.splice(idx, 1);
+  saveState(s);
+  return true;
+}
+
+/** 开关 kickme 规则 */
+export function toggleKickmeRule(id: string): boolean | null {
+  const s = loadState();
+  const rule = s.kickme.find((r) => r.id === id);
+  if (!rule) return null;
+  rule.enabled = !rule.enabled;
+  saveState(s);
+  return rule.enabled;
+}
+
+/** 设置 kickme 规则提示音 */
+export function setKickmeSound(id: string, on: boolean): boolean {
+  const s = loadState();
+  const rule = s.kickme.find((r) => r.id === id);
+  if (!rule) return false;
+  rule.sound = on;
+  saveState(s);
+  return true;
 }
 
 // ====================================================================

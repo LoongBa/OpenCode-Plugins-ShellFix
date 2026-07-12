@@ -69,6 +69,11 @@ import {
   clearModuleConditions,
   getSyncConfig,
   setSyncConfig,
+  getKickmeRules,
+  addKickmeRule,
+  removeKickmeRule,
+  toggleKickmeRule,
+  setKickmeSound,
   CMD_RULES_META,
   type CmdRuleName,
   type PluginState,
@@ -76,6 +81,7 @@ import {
   type InjectCondition,
   type ConditionPredicate,
   type SyncConfig,
+  type KickmeRule,
 } from "./lib/state";
 
 import {
@@ -90,6 +96,8 @@ import {
   removeNote,
   listTagTree,
   queryNotes,
+  listNotesByTime,
+  queryNotesByTime,
   resolveEnvVar,
   cloneRemoteRepo,
   pullRemoteRepo,
@@ -204,8 +212,8 @@ const CI_ENV_VARS: Record<string, string> = {
 
 // shellfix 特殊指令（tool.execute.before 中保留兼容）
 const SPECIAL_CMD_RE = /^\s*[/#]shellfix\b/;
-const PIPE_CMD_RE = /^\s*\|(shellfix|my|note|auto)(?:\s|$)/;
-const SLASH_CMD_RE = /^\s*\/(shellfix|my|note|auto)(?:\s|$)/;
+const PIPE_CMD_RE = /^\s*\|(shellfix|my|note|auto|kickme)(?:\s|$)/;
+const SLASH_CMD_RE = /^\s*\/(shellfix|my|note|auto|kickme)(?:\s|$)/;
 
 // ====================================================================
 // 新增命令规则正则
@@ -269,6 +277,7 @@ export const ShellFixPlugin: Plugin = async () => {
           case "my":       text = handleMyCommand(pipeArgs); break;
           case "note":     text = handleNoteCommand(pipeArgs); break;
           case "auto":     text = handleAutoCommand(pipeArgs); break;
+          case "kickme":   text = handleKickmeCommand(pipeArgs); break;
         }
         // 转义单引号后用 Write-Host 输出
         const escaped = text.replace(/'/g, "''");
@@ -287,6 +296,7 @@ export const ShellFixPlugin: Plugin = async () => {
           case "my":       text = handleMyCommand(slashArgs); break;
           case "note":     text = handleNoteCommand(slashArgs); break;
           case "auto":     text = handleAutoCommand(slashArgs); break;
+          case "kickme":   text = handleKickmeCommand(slashArgs); break;
         }
         const escaped = text.replace(/'/g, "''");
         out.args.command = `${ENCODING_PREFIX}Write-Host '${escaped}'`;
@@ -349,6 +359,9 @@ export const ShellFixPlugin: Plugin = async () => {
           break;
         case "auto":
           text = handleAutoCommand(args.trim());
+          break;
+        case "kickme":
+          text = handleKickmeCommand(args.trim());
           break;
         default:
           return; // 不处理未知命令
@@ -1212,6 +1225,41 @@ function handleNoteCommand(args: string): string {
       children.map((c) => `  #${prefix}${c.endsWith("/") ? c.slice(0, -1) : c}#`).join("\n");
   }
 
+  // timeline 时间线
+  if (first === "timeline") {
+    let tagFilter = "";
+    let limit = 20;
+    let since: string | undefined;
+    let i = 1;
+    const tlTokens = args.split(/\s+/);
+    while (i < tlTokens.length) {
+      const t = tlTokens[i];
+      if (t === "--limit") {
+        limit = parseInt(tlTokens[++i], 10) || 20;
+      } else if (t === "--since") {
+        const raw = tlTokens[++i];
+        if (raw) {
+          since = raw.length === 10 ? raw + "T00:00:00.000Z" : raw;
+        }
+      } else if (t.startsWith("#") && t.endsWith("#")) {
+        tagFilter = t.slice(1, -1);
+      }
+      i++;
+    }
+    const notes = tagFilter
+      ? queryNotesByTime(tagFilter, limit, since)
+      : listNotesByTime(limit, since);
+    if (notes.length === 0) return "暂无笔记。";
+    const lines: string[] = [`笔记时间线（显示 ${notes.length} 条）`, "─".repeat(40)];
+    for (const n of notes) {
+      const date = n.created.slice(0, 19).replace("T", " ");
+      lines.push(`[${date}] #${n.tag}#`);
+      lines.push(n.content.slice(0, 100));
+      lines.push("");
+    }
+    return lines.join("\n");
+  }
+
   // rm 子命令
   if (first === "rm") {
     const tagMatch = args.match(NOTE_TAG_RE);
@@ -1255,6 +1303,10 @@ function handleNoteCommand(args: string): string {
       `笔记系统帮助\n`,
       `/note ?             列出所有标签`,
       `/note ? <prefix>    浏览标签树`,
+      `/note timeline      按时间线浏览笔记（最近 20 条）`,
+      `/note timeline --limit 50  最多 50 条`,
+      `/note timeline --since 2025-01-01  从指定日期开始`,
+      `/note timeline #tag#          按标签过滤`,
       `/note #tag#:content  保存笔记`,
       `/note #tag#          注入笔记`,
       `/note rm #tag#       删除笔记`,
@@ -1552,4 +1604,80 @@ function handleInjectConditions(args: string[]): string {
     `/auto conditions ${modName} toggle <index>   开关条件\n` +
     `/auto conditions ${modName} clear            清除条件\n` +
     `/auto conditions ${modName} eval             测试评估`;
+}
+
+// ====================================================================
+// /kickme 命令处理
+// ====================================================================
+
+function handleKickmeCommand(args: string): string {
+  if (!args) {
+    const rules = getKickmeRules();
+    if (rules.length === 0) return "暂无 kickme 规则。\n用法: /kickme add <关键词> <标题> <消息>";
+    const lines: string[] = [];
+    lines.push(`Kickme 通知规则 (${rules.length} 条)`);
+    for (const rule of rules) {
+      const icon = rule.enabled ? "✅" : "⏸️";
+      lines.push(`  ${icon} ${rule.label} (${rule.id})`);
+      lines.push(`     → ${rule.title}`);
+    }
+    return lines.join("\n");
+  }
+
+  const tokens = args.split(/\s+/);
+  const first = tokens[0];
+
+  if (first === "add") {
+    const keyword = tokens[1];
+    const title = tokens[2] || keyword;
+    const message = tokens.slice(3).join(" ") || `触发关键词: ${keyword}`;
+    if (!keyword) return "用法: /kickme add <关键词> <标题> <消息>";
+    const id = addKickmeRule({
+      label: keyword,
+      enabled: true,
+      matchType: "keyword",
+      pattern: keyword,
+      title,
+      message,
+      sound: false,
+      scope: "both",
+    });
+    return `规则已添加: "${keyword}" (${id})`;
+  }
+
+  if (first === "rm") {
+    const id = tokens[1];
+    if (!id) return "用法: /kickme rm <id>";
+    if (removeKickmeRule(id)) return `规则已删除: ${id}`;
+    return `规则不存在: ${id}`;
+  }
+
+  if (first === "on") {
+    const id = tokens[1];
+    if (!id) return "用法: /kickme on <id>";
+    const rule = getKickmeRules().find((r) => r.id === id);
+    if (!rule) return `规则不存在: ${id}`;
+    if (!rule.enabled) toggleKickmeRule(id);
+    return `规则已开启: ${rule.label}`;
+  }
+
+  if (first === "off") {
+    const id = tokens[1];
+    if (!id) return "用法: /kickme off <id>";
+    const rule = getKickmeRules().find((r) => r.id === id);
+    if (!rule) return `规则不存在: ${id}`;
+    if (rule.enabled) toggleKickmeRule(id);
+    return `规则已关闭: ${rule.label}`;
+  }
+
+  if (first === "sound") {
+    const id = tokens[1];
+    const onOff = tokens[2];
+    if (!id || !onOff) return "用法: /kickme sound <id> on|off";
+    const ok = setKickmeSound(id, onOff === "on");
+    if (!ok) return `规则不存在: ${id}`;
+    return `提示音: ${onOff === "on" ? "ON" : "OFF"}`;
+  }
+
+  return "无法解析。用法: /kickme add|rm|on|off|sound";
 }

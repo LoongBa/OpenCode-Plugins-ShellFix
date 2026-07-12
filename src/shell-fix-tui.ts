@@ -32,10 +32,16 @@ import {
   toggleModuleCondition,
   clearModuleConditions,
   getSyncConfig,
+  getKickmeRules,
+  addKickmeRule,
+  removeKickmeRule,
+  toggleKickmeRule,
+  setKickmeSound,
   CMD_RULES_META,
   type CmdRuleName,
   type AutoMode,
   type InjectCondition,
+  type KickmeRule,
 } from "./lib/state";
 
 import {
@@ -46,6 +52,8 @@ import {
   getNote,
   saveNote,
   removeNote,
+  listNotesByTime,
+  queryNotesByTime,
   listTagTree,
   countTemplatesBySource,
 } from "./lib/template-store";
@@ -226,7 +234,7 @@ const NOTE_SAVE_RE = /^#([^#]+)#:(.*)$/s;
 const NOTE_TAG_RE = /^#([^#]+)#$/;
 
 handlers.set("note", (args: string): DispatchResult | null => {
-  if (!args) return { output: "笔记系统\n用法: /note ? 浏览 /note #tag# 注入" };
+  if (!args) return { output: "笔记系统\n用法: /note ? 浏览 /note #tag# 注入 /note timeline 查看时间线" };
 
   const tokens = args.split(/\s+/);
   const first = tokens[0];
@@ -247,6 +255,41 @@ handlers.set("note", (args: string): DispatchResult | null => {
       return { toast: `标签 "${rest}" 下无内容` };
     }
     return { output: `${rest}/ 下的子标签：\n` + children.map((c) => `  #${prefix}${c.endsWith("/") ? c.slice(0, -1) : c}#`).join("\n") };
+  }
+
+  // timeline 时间线
+  if (first === "timeline") {
+    let tagFilter = "";
+    let limit = 20;
+    let since: string | undefined;
+    let i = 1;
+    while (i < tokens.length) {
+      const t = tokens[i];
+      if (t === "--limit") {
+        limit = parseInt(tokens[++i], 10) || 20;
+      } else if (t === "--since") {
+        const raw = tokens[++i];
+        if (raw) {
+          // 支持 YYYY-MM-DD 和 YYYY-MM-DDTHH:mm:ss.SSSZ
+          since = raw.length === 10 ? raw + "T00:00:00.000Z" : raw;
+        }
+      } else if (t.startsWith("#") && t.endsWith("#")) {
+        tagFilter = t.slice(1, -1);
+      }
+      i++;
+    }
+    const notes = tagFilter
+      ? queryNotesByTime(tagFilter, limit, since)
+      : listNotesByTime(limit, since);
+    if (notes.length === 0) return { toast: "暂无笔记" };
+    const lines: string[] = [`📅 笔记时间线（显示 ${notes.length} 条）`, "━".repeat(40)];
+    for (const n of notes) {
+      const date = n.created.slice(0, 19).replace("T", " ");
+      lines.push(`#${date}# #${n.tag}#`);
+      lines.push(n.content.slice(0, 100));
+      lines.push("");
+    }
+    return { output: lines.join("\n") };
   }
 
   // rm
@@ -483,6 +526,104 @@ function buildAutoPanel(): DispatchResult | null {
   lines.push(`║  /auto help         查看全部子命令     ║`);
   lines.push(`╚══════════════════════════════════════╝`);
   return { output: lines.join("\n") };
+}
+
+// ====================================================================
+
+// ── /kickme ────────────────────────────────────────────────────────
+
+handlers.set("kickme", (args: string): DispatchResult | null => {
+  if (!args) return listKickmeRules();
+
+  const tokens = args.split(/\s+/);
+  const first = tokens[0];
+
+  // /kickme add <keyword> <title> <message>
+  if (first === "add") {
+    const keyword = tokens[1];
+    const title = tokens[2] || keyword;
+    const message = tokens.slice(3).join(" ") || `触发关键词: ${keyword}`;
+    if (!keyword) return { toast: "用法: /kickme add <关键词> <标题> <消息>" };
+    const id = addKickmeRule({
+      label: keyword,
+      enabled: true,
+      matchType: "keyword",
+      pattern: keyword,
+      title,
+      message,
+      sound: false,
+      scope: "both",
+    });
+    return { toast: `规则已添加: "${keyword}" (${id})` };
+  }
+
+  // /kickme rm <id>
+  if (first === "rm") {
+    const id = tokens[1];
+    if (!id) return { toast: "用法: /kickme rm <id>" };
+    if (removeKickmeRule(id)) return { toast: `规则已删除: ${id}` };
+    return { toast: `规则不存在: ${id}` };
+  }
+
+  // /kickme on <id>
+  if (first === "on") {
+    const id = tokens[1];
+    if (!id) return { toast: "用法: /kickme on <id>" };
+    const rule = getKickmeRules().find((r) => r.id === id);
+    if (!rule) return { toast: `规则不存在: ${id}` };
+    if (!rule.enabled) toggleKickmeRule(id);
+    return { toast: `规则已开启: ${rule.label}` };
+  }
+
+  // /kickme off <id>
+  if (first === "off") {
+    const id = tokens[1];
+    if (!id) return { toast: "用法: /kickme off <id>" };
+    const rule = getKickmeRules().find((r) => r.id === id);
+    if (!rule) return { toast: `规则不存在: ${id}` };
+    if (rule.enabled) toggleKickmeRule(id);
+    return { toast: `规则已关闭: ${rule.label}` };
+  }
+
+  // /kickme sound <id> on/off
+  if (first === "sound") {
+    const id = tokens[1];
+    const onOff = tokens[2];
+    if (!id || !onOff) return { toast: "用法: /kickme sound <id> on|off" };
+    const ok = setKickmeSound(id, onOff === "on");
+    if (!ok) return { toast: `规则不存在: ${id}` };
+    return { toast: `提示音: ${onOff === "on" ? "ON" : "OFF"}` };
+  }
+
+  return { output: listKickmeRulesOutput() };
+});
+
+function listKickmeRules(): DispatchResult | null {
+  return { output: listKickmeRulesOutput() };
+}
+
+function listKickmeRulesOutput(): string {
+  const rules = getKickmeRules();
+  if (rules.length === 0) {
+    return "暂无 kickme 规则。\n用法: /kickme add <关键词> <标题> <消息>";
+  }
+  const lines: string[] = [];
+  lines.push(`╔══════════════════════════════════════╗`);
+  lines.push(`║ Kickme 通知规则                       ║`);
+  lines.push(`╠══════════════════════════════════════╣`);
+  for (const rule of rules) {
+    const icon = rule.enabled ? "✅" : "⏸️";
+    const sound = rule.sound ? "🔊" : "  ";
+    const scope = rule.scope === "user" ? "用户" : rule.scope === "llm" ? "LLM" : "全部";
+    lines.push(`║  ${icon}${sound} [${scope}] ${rule.label.padEnd(16)}${rule.id.padEnd(12)}║`);
+    lines.push(`║      → ${rule.title.padEnd(36)}║`);
+  }
+  lines.push(`║                                      ║`);
+  lines.push(`║  /kickme add <关键词> <标题> <消息>   ║`);
+  lines.push(`║  /kickme rm|on|off <id>              ║`);
+  lines.push(`║  /kickme sound <id> on|off           ║`);
+  lines.push(`╚══════════════════════════════════════╝`);
+  return lines.join("\n");
 }
 
 // ====================================================================
@@ -886,6 +1027,25 @@ const tui: TuiPlugin = async (api, _options, _meta) => {
           } catch {}
         },
       },
+
+      // ── /kickme ───────────────────────────────────────────────────
+      {
+        name: "shellfix.kickme",
+        title: "ShellFix 通知规则",
+        category: "ShellFix",
+        namespace: "palette",
+        slashName: "kickme",
+        run() {
+          try {
+            api.ui.dialog?.clear?.();
+            dispatch(api, "kickme", "").then((handled) => {
+              if (!handled) {
+                api.client?.tui?.executeCommand?.({ command: "|kickme" });
+              }
+            });
+          } catch {}
+        },
+      },
     ],
   });
 
@@ -932,20 +1092,43 @@ const tui: TuiPlugin = async (api, _options, _meta) => {
     }
   }
 
+  /**
+   * 检查 kickme 规则，匹配时弹出 toast 通知
+   * @param scope 事件源 — "user" (用户消息) 或 "llm" (LLM 回复)
+   */
+  function checkKickmeRules(text: string, scope: "user" | "llm"): void {
+    if (!text) return;
+    const rules = getKickmeRules();
+    for (const rule of rules) {
+      if (!rule.enabled) continue;
+      if (rule.scope !== "both" && rule.scope !== scope) continue;
+      const matched = rule.matchType === "regex"
+        ? new RegExp(rule.pattern, "i").test(text)
+        : text.toLowerCase().includes(rule.pattern.toLowerCase());
+      if (matched) {
+        const message = rule.message.replace("{matched}", rule.pattern);
+        try {
+          api.ui.toast({ message: `${rule.title}: ${message}` });
+          if (rule.sound) {
+            api.attention?.notify?.({ title: rule.title, message });
+          }
+        } catch { /* 静默 */ }
+        break; // 每条文本只触发第一个匹配规则
+      }
+    }
+  }
+
   // ── 订阅：用户消息被提交 ──────────────────────────────────────
   api.event.on("session.next.prompted", (event: any) => {
     try {
       const data = event?.data;
       if (!data) return;
 
-      // 1. 提取用户消息文本
       const text = extractText(data);
 
-      // 2. 缓存为 lastMessage（供 :last 使用）
       if (text) setLastMessage(text);
-
-      // 3. 自动采集文本中的 #标签#
       autoCollectTags(text);
+      checkKickmeRules(text, "user");
     } catch { /* 静默 */ }
   });
 
@@ -955,14 +1138,63 @@ const tui: TuiPlugin = async (api, _options, _meta) => {
       const text = extractText(event?.data);
       if (!text) return;
 
-      // 1. 缓存为 lastMessage（供 :last 使用）
       setLastMessage(text);
-
-      // 2. 自动采集 LLM 回复中的 #标签#
       autoCollectTags(text);
+      checkKickmeRules(text, "llm");
     } catch { /* 静默 */ }
   });
+
+  // ── 会话级自动注入（mode === "prompt" 时弹窗） ─────────────
+  const s0 = loadState();
+  if (s0.auto.mode === "prompt") {
+    setTimeout(() => {
+      try {
+        showSessionModuleDialog(api);
+      } catch { /* 静默 */ }
+    }, 800);
+  }
 };
+
+/**
+ * 会话级模块选择弹窗 — 多轮选择直到用户点「完成」
+ * 选择的模块通过 setAutoModule 持久化，system.transform 钩子自动生效
+ */
+function showSessionModuleDialog(api: any): void {
+  const current = getEnabledAutoModules();
+  const options = AUTO_MODULES.map((mod) => ({
+    label: `${current.includes(mod.name) ? "✅" : "  "} ${mod.label}`,
+    value: mod.name,
+    description: mod.description,
+  }));
+  options.unshift({
+    label: "✅ 完成选择",
+    value: "__done__",
+    description: "使用当前选中的模块",
+  });
+  api.ui.dialog?.replace?.(() =>
+    api.ui.DialogSelect({
+      title: "本次会话启用哪些模块？（点击切换，选完点「完成选择」）",
+      options,
+      onSelect: (value: string) => {
+        if (value === "__done__") {
+          api.ui.dialog?.clear?.();
+          return;
+        }
+        // 读取最新 state 并 toggle
+        const fresh = getEnabledAutoModules();
+        const newEnabled = fresh.includes(value)
+          ? fresh.filter((n) => n !== value)
+          : [...fresh, value];
+        for (const mod of AUTO_MODULES) {
+          setAutoModule(mod.name, newEnabled.includes(mod.name));
+        }
+        // 刷新弹窗显示新状态
+        showSessionModuleDialog(api);
+      },
+      onCancel: () => api.ui.dialog?.clear?.(),
+    })
+  );
+}
 
 const plugin: TuiPluginModule & { id: string } = {
   id: "shellfix",
