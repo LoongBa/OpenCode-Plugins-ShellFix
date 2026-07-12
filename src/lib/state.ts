@@ -68,6 +68,9 @@ export interface PluginState {
   auto: AutoState;
   sync: SyncConfig;
   kickme: KickmeRule[];
+  dynamic: DynamicRule[];
+  autoRules: AutoRuleV2[];
+  pendingDynamic: string[];
 }
 
 export interface KickmeRule {
@@ -80,6 +83,25 @@ export interface KickmeRule {
   message: string;
   sound: boolean;
   scope: "user" | "llm" | "both";
+}
+
+export interface DynamicRule {
+  id: string;
+  trigger: string;       // 触发关键词/正则
+  enabled: boolean;
+  matchType: "keyword" | "regex";
+  context: string;       // 注入的上下文文本（上限 500 字符）
+  cooldown: number;      // 冷却时间（秒），0 表示无冷却
+  lastTriggered: number; // 上次触发时间戳（ms），0 表示从未触发
+}
+
+export interface AutoRuleV2 {
+  id: string;
+  trigger: "session_start" | "user_input";
+  module: string;        // 关联的 AutoModule name
+  conditions: string[];  // 条件表达式（未来扩展）
+  enabled: boolean;
+  priority: number;      // 注入顺序
 }
 
 /** 所有命令规则的元信息，供 ui 渲染 */
@@ -139,6 +161,9 @@ const DEFAULT_STATE: PluginState = {
     lastSyncAt: "",
   },
   kickme: [],
+  dynamic: [],
+  autoRules: [],
+  pendingDynamic: [],
 };
 
 // ====================================================================
@@ -373,6 +398,159 @@ export function setKickmeSound(id: string, on: boolean): boolean {
   rule.sound = on;
   saveState(s);
   return true;
+}
+
+// ====================================================================
+// DynamicRule 动态上下文注入规则管理
+// ====================================================================
+
+let _dynamicIdCounter = 0;
+
+function _seedDynamicIdCounter(): void {
+  const s = loadState();
+  let max = 0;
+  for (const r of s.dynamic) {
+    const m = r.id.match(/^dm_(\d+)_/);
+    if (m) {
+      const n = parseInt(m[1], 10);
+      if (n > max) max = n;
+    }
+  }
+  _dynamicIdCounter = max;
+}
+
+/** 获取所有动态规则 */
+export function getDynamicRules(): DynamicRule[] {
+  return [...loadState().dynamic];
+}
+
+/** 添加动态规则 */
+export function addDynamicRule(rule: Omit<DynamicRule, "id">): string {
+  const s = loadState();
+  if (_dynamicIdCounter === 0) _seedDynamicIdCounter();
+  const id = `dm_${++_dynamicIdCounter}_${Date.now()}`;
+  s.dynamic.push({ ...rule, id });
+  saveState(s);
+  return id;
+}
+
+/** 删除动态规则 */
+export function removeDynamicRule(id: string): boolean {
+  const s = loadState();
+  const idx = s.dynamic.findIndex((r) => r.id === id);
+  if (idx === -1) return false;
+  s.dynamic.splice(idx, 1);
+  saveState(s);
+  return true;
+}
+
+/** 开关动态规则 */
+export function toggleDynamicRule(id: string): boolean | null {
+  const s = loadState();
+  const rule = s.dynamic.find((r) => r.id === id);
+  if (!rule) return null;
+  rule.enabled = !rule.enabled;
+  saveState(s);
+  return rule.enabled;
+}
+
+/** 设置动态规则冷却时间 */
+export function setDynamicCooldown(id: string, seconds: number): boolean {
+  const s = loadState();
+  const rule = s.dynamic.find((r) => r.id === id);
+  if (!rule) return false;
+  rule.cooldown = Math.max(0, seconds);
+  saveState(s);
+  return true;
+}
+
+/** 标记规则已触发（更新 lastTriggered） */
+export function markDynamicTriggered(id: string): void {
+  const s = loadState();
+  const rule = s.dynamic.find((r) => r.id === id);
+  if (!rule) return;
+  rule.lastTriggered = Date.now();
+  saveState(s);
+}
+
+/** 检查规则是否在冷却中 */
+export function isDynamicOnCooldown(rule: DynamicRule): boolean {
+  if (rule.cooldown <= 0 || rule.lastTriggered <= 0) return false;
+  return (Date.now() - rule.lastTriggered) < rule.cooldown * 1000;
+}
+
+// ====================================================================
+// AutoRuleV2 CRUD
+// ====================================================================
+
+let _autoRuleIdCounter = 0;
+
+function _seedAutoRuleIdCounter(): void {
+  const s = loadState();
+  let max = 0;
+  for (const r of s.autoRules) {
+    const m = r.id.match(/^ar_(\d+)_/);
+    if (m) {
+      const n = parseInt(m[1], 10);
+      if (n > max) max = n;
+    }
+  }
+  _autoRuleIdCounter = max;
+}
+
+/** 获取所有 AutoRuleV2 */
+export function getAutoRules(): AutoRuleV2[] {
+  return [...loadState().autoRules];
+}
+
+/** 添加 AutoRuleV2 */
+export function addAutoRule(rule: Omit<AutoRuleV2, "id">): string {
+  const s = loadState();
+  if (_autoRuleIdCounter === 0) _seedAutoRuleIdCounter();
+  const id = `ar_${++_autoRuleIdCounter}_${Date.now()}`;
+  s.autoRules.push({ ...rule, id });
+  saveState(s);
+  return id;
+}
+
+/** 删除 AutoRuleV2 */
+export function removeAutoRule(id: string): boolean {
+  const s = loadState();
+  const idx = s.autoRules.findIndex((r) => r.id === id);
+  if (idx === -1) return false;
+  s.autoRules.splice(idx, 1);
+  saveState(s);
+  return true;
+}
+
+/** 开关 AutoRuleV2 */
+export function toggleAutoRule(id: string): boolean | null {
+  const s = loadState();
+  const rule = s.autoRules.find((r) => r.id === id);
+  if (!rule) return null;
+  rule.enabled = !rule.enabled;
+  saveState(s);
+  return rule.enabled;
+}
+
+/** 向后兼容：旧版 module toggle 同步到 AutoRuleV2 */
+export function syncModuleToAutoRule(moduleName: string, enabled: boolean): void {
+  const s = loadState();
+  // 查找是否已有对应的 AutoRuleV2
+  const existing = s.autoRules.find((r) => r.module === moduleName && r.trigger === "session_start");
+  if (existing) {
+    existing.enabled = enabled;
+  } else {
+    s.autoRules.push({
+      id: `ar_sync_${Date.now()}`,
+      trigger: "session_start",
+      module: moduleName,
+      conditions: [],
+      enabled,
+      priority: 50,
+    });
+  }
+  saveState(s);
 }
 
 // ====================================================================

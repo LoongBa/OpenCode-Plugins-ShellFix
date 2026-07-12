@@ -82,6 +82,13 @@ import {
   type ConditionPredicate,
   type SyncConfig,
   type KickmeRule,
+  getDynamicRules,
+  type DynamicRule,
+  getAutoRules,
+  addAutoRule,
+  removeAutoRule,
+  toggleAutoRule,
+  type AutoRuleV2,
 } from "./lib/state";
 
 import {
@@ -212,8 +219,8 @@ const CI_ENV_VARS: Record<string, string> = {
 
 // shellfix 特殊指令（tool.execute.before 中保留兼容）
 const SPECIAL_CMD_RE = /^\s*[/#]shellfix\b/;
-const PIPE_CMD_RE = /^\s*\|(shellfix|my|note|auto|kickme)(?:\s|$)/;
-const SLASH_CMD_RE = /^\s*\/(shellfix|my|note|auto|kickme)(?:\s|$)/;
+const PIPE_CMD_RE = /^\s*\|(shellfix|my|note|auto|kickme|dynamic)(?:\s|$)/;
+const SLASH_CMD_RE = /^\s*\/(shellfix|my|note|auto|kickme|dynamic)(?:\s|$)/;
 
 // ====================================================================
 // 新增命令规则正则
@@ -278,6 +285,7 @@ export const ShellFixPlugin: Plugin = async () => {
           case "note":     text = handleNoteCommand(pipeArgs); break;
           case "auto":     text = handleAutoCommand(pipeArgs); break;
           case "kickme":   text = handleKickmeCommand(pipeArgs); break;
+          case "dynamic":  text = handleDynamicCommand(pipeArgs); break;
         }
         // 转义单引号后用 Write-Host 输出
         const escaped = text.replace(/'/g, "''");
@@ -297,6 +305,7 @@ export const ShellFixPlugin: Plugin = async () => {
           case "note":     text = handleNoteCommand(slashArgs); break;
           case "auto":     text = handleAutoCommand(slashArgs); break;
           case "kickme":   text = handleKickmeCommand(slashArgs); break;
+          case "dynamic":  text = handleDynamicCommand(slashArgs); break;
         }
         const escaped = text.replace(/'/g, "''");
         out.args.command = `${ENCODING_PREFIX}Write-Host '${escaped}'`;
@@ -363,6 +372,9 @@ export const ShellFixPlugin: Plugin = async () => {
         case "kickme":
           text = handleKickmeCommand(args.trim());
           break;
+        case "dynamic":
+          text = handleDynamicCommand(args.trim());
+          break;
         default:
           return; // 不处理未知命令
       }
@@ -390,6 +402,22 @@ export const ShellFixPlugin: Plugin = async () => {
       // require 文本
       if (s.auto.require) {
         chunks.push(s.auto.require);
+      }
+
+      // ── 动态上下文注入（消费 pendingDynamic 缓存） ──────────
+      if (s.pendingDynamic && s.pendingDynamic.length > 0) {
+        const dynamicRules = getDynamicRules();
+        const consumed: string[] = [];
+        for (const id of s.pendingDynamic) {
+          const rule = dynamicRules.find((r) => r.id === id);
+          if (rule && rule.enabled && rule.context) {
+            chunks.push(`[动态上下文 - ${rule.trigger}]\n${rule.context}`);
+          }
+          consumed.push(id);
+        }
+        // 清空已消费的 pendingDynamic
+        s.pendingDynamic = s.pendingDynamic.filter((id) => !consumed.includes(id));
+        saveState(s);
       }
 
       if (chunks.length === 0) return;
@@ -1442,6 +1470,11 @@ function handleAutoCommand(args: string): string {
     return handleInjectConditions(tokens.slice(1));
   }
 
+  // /auto rule — AutoRuleV2 管理
+  if (first === "rule") {
+    return handleAutoRuleServer(tokens.slice(1));
+  }
+
   // /auto help
   if (first === "help") {
     return [
@@ -1680,4 +1713,127 @@ function handleKickmeCommand(args: string): string {
   }
 
   return "无法解析。用法: /kickme add|rm|on|off|sound";
+}
+
+function handleDynamicCommand(args: string): string {
+  if (!args) {
+    const rules = getDynamicRules();
+    if (rules.length === 0) return "暂无动态规则。\n用法: /dynamic add <触发词> <注入内容>";
+    const lines: string[] = [];
+    lines.push(`Dynamic 动态上下文注入规则 (${rules.length} 条)`);
+    for (const rule of rules) {
+      const icon = rule.enabled ? "✅" : "⏸️";
+      const cd = rule.cooldown > 0 ? `[CD:${rule.cooldown}s]` : "";
+      lines.push(`  ${icon}${cd} ${rule.trigger} (${rule.id})`);
+      lines.push(`     → ${(rule.context || "").slice(0, 60)}`);
+    }
+    return lines.join("\n");
+  }
+
+  const tokens = args.split(/\s+/);
+  const first = tokens[0];
+
+  if (first === "add") {
+    const trigger = tokens[1];
+    const context = tokens.slice(2).join(" ");
+    if (!trigger) return "用法: /dynamic add <触发词> <注入内容>";
+    const id = addDynamicRule({
+      trigger,
+      enabled: true,
+      matchType: "keyword",
+      context: context || `(当前对话涉及 ${trigger})`,
+      cooldown: 0,
+      lastTriggered: 0,
+    });
+    return `动态规则已添加: "${trigger}" (${id})`;
+  }
+
+  if (first === "rm") {
+    const id = tokens[1];
+    if (!id) return "用法: /dynamic rm <id>";
+    if (removeDynamicRule(id)) return `规则已删除: ${id}`;
+    return `规则不存在: ${id}`;
+  }
+
+  if (first === "on") {
+    const id = tokens[1];
+    if (!id) return "用法: /dynamic on <id>";
+    const rules = getDynamicRules();
+    const rule = rules.find((r) => r.id === id);
+    if (!rule) return `规则不存在: ${id}`;
+    if (!rule.enabled) toggleDynamicRule(id);
+    return `规则已开启: ${rule.trigger}`;
+  }
+
+  if (first === "off") {
+    const id = tokens[1];
+    if (!id) return "用法: /dynamic off <id>";
+    const rules = getDynamicRules();
+    const rule = rules.find((r) => r.id === id);
+    if (!rule) return `规则不存在: ${id}`;
+    if (rule.enabled) toggleDynamicRule(id);
+    return `规则已关闭: ${rule.trigger}`;
+  }
+
+  if (first === "cooldown") {
+    const id = tokens[1];
+    const seconds = parseInt(tokens[2], 10);
+    if (!id || Number.isNaN(seconds)) return "用法: /dynamic cooldown <id> <秒数>";
+    if (setDynamicCooldown(id, seconds)) return `冷却时间已设置: ${seconds}s`;
+    return `规则不存在: ${id}`;
+  }
+
+  return "无法解析。用法: /dynamic add|rm|on|off|cooldown";
+}
+
+function handleAutoRuleServer(args: string[]): string {
+  if (args.length === 0) {
+    const rules = getAutoRules();
+    if (rules.length === 0) return "暂无 AutoRule。\n用法: /auto rule add <module> [trigger]";
+    const lines: string[] = [`AutoRuleV2 规则 (${rules.length} 条)：`];
+    for (const rule of rules) {
+      const icon = rule.enabled ? "✅" : "⏸️";
+      lines.push(`  ${icon} [${rule.trigger}] ${rule.module} (${rule.id})`);
+    }
+    return lines.join("\n");
+  }
+
+  const first = args[0];
+
+  if (first === "add") {
+    const module = args[1];
+    const trigger = (args[2] || "session_start") as "session_start" | "user_input";
+    if (!module) return "用法: /auto rule add <module> [trigger]";
+    const id = addAutoRule({ trigger, module, conditions: [], enabled: true, priority: 50 });
+    return `AutoRule 已添加: ${module} (${id})`;
+  }
+
+  if (first === "rm") {
+    const id = args[1];
+    if (!id) return "用法: /auto rule rm <id>";
+    if (removeAutoRule(id)) return `规则已删除: ${id}`;
+    return `规则不存在: ${id}`;
+  }
+
+  if (first === "on") {
+    const id = args[1];
+    if (!id) return "用法: /auto rule on <id>";
+    const rules = getAutoRules();
+    const rule = rules.find((r) => r.id === id);
+    if (!rule) return `规则不存在: ${id}`;
+    if (!rule.enabled) toggleAutoRule(id);
+    return `规则已开启: ${rule.module}`;
+  }
+
+  if (first === "off") {
+    const id = args[1];
+    if (!id) return "用法: /auto rule off <id>";
+    const rules = getAutoRules();
+    const rule = rules.find((r) => r.id === id);
+    if (!rule) return `规则不存在: ${id}`;
+    if (rule.enabled) toggleAutoRule(id);
+    return `规则已关闭: ${rule.module}`;
+  }
+
+  return "用法: /auto rule add|rm|on|off";
 }

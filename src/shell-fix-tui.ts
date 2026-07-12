@@ -42,6 +42,19 @@ import {
   type AutoMode,
   type InjectCondition,
   type KickmeRule,
+  getDynamicRules,
+  addDynamicRule,
+  removeDynamicRule,
+  toggleDynamicRule,
+  setDynamicCooldown,
+  markDynamicTriggered,
+  isDynamicOnCooldown,
+  type DynamicRule,
+  getAutoRules,
+  addAutoRule,
+  removeAutoRule,
+  toggleAutoRule,
+  type AutoRuleV2,
 } from "./lib/state";
 
 import {
@@ -419,6 +432,11 @@ handlers.set("auto", (args: string): DispatchResult | null => {
     return handleAutoConditions(tokens.slice(1));
   }
 
+  // /auto rule — AutoRuleV2 管理
+  if (first === "rule") {
+    return handleAutoRule(tokens.slice(1));
+  }
+
   // /auto help
   if (first === "help") {
     return { output: [
@@ -431,6 +449,7 @@ handlers.set("auto", (args: string): DispatchResult | null => {
       `/auto show <module>     查看模块内容`,
       `/auto reset             恢复默认`,
       `/auto conditions        条件管理`,
+      `/auto rule              规则管理`,
     ].join("\n") };
   }
 
@@ -503,6 +522,58 @@ function handleAutoConditions(args: string[]): DispatchResult | null {
   }
 
   return { toast: `用法: /auto conditions ${modName} add|rm|toggle|clear` };
+}
+
+function handleAutoRule(args: string[]): DispatchResult | null {
+  if (args.length === 0) {
+    const rules = getAutoRules();
+    if (rules.length === 0) return { output: "暂无 AutoRule。\n用法: /auto rule add <module> <trigger>" };
+    const lines: string[] = [`AutoRuleV2 规则 (${rules.length} 条)：\n`];
+    for (const rule of rules) {
+      const icon = rule.enabled ? "✅" : "⏸️";
+      lines.push(`  ${icon} [${rule.trigger}] ${rule.module} (${rule.id})`);
+    }
+    return { output: lines.join("\n") };
+  }
+
+  const first = args[0];
+
+  if (first === "add") {
+    const module = args[1];
+    const trigger = (args[2] || "session_start") as "session_start" | "user_input";
+    if (!module) return { toast: "用法: /auto rule add <module> [trigger]" };
+    const id = addAutoRule({ trigger, module, conditions: [], enabled: true, priority: 50 });
+    return { toast: `AutoRule 已添加: ${module} (${id})` };
+  }
+
+  if (first === "rm") {
+    const id = args[1];
+    if (!id) return { toast: "用法: /auto rule rm <id>" };
+    if (removeAutoRule(id)) return { toast: `规则已删除: ${id}` };
+    return { toast: `规则不存在: ${id}` };
+  }
+
+  if (first === "on") {
+    const id = args[1];
+    if (!id) return { toast: "用法: /auto rule on <id>" };
+    const rules = getAutoRules();
+    const rule = rules.find((r) => r.id === id);
+    if (!rule) return { toast: `规则不存在: ${id}` };
+    if (!rule.enabled) toggleAutoRule(id);
+    return { toast: `规则已开启: ${rule.module}` };
+  }
+
+  if (first === "off") {
+    const id = args[1];
+    if (!id) return { toast: "用法: /auto rule off <id>" };
+    const rules = getAutoRules();
+    const rule = rules.find((r) => r.id === id);
+    if (!rule) return { toast: `规则不存在: ${id}` };
+    if (rule.enabled) toggleAutoRule(id);
+    return { toast: `规则已关闭: ${rule.module}` };
+  }
+
+  return { toast: "用法: /auto rule add|rm|on|off" };
 }
 
 function buildAutoPanel(): DispatchResult | null {
@@ -626,6 +697,100 @@ function listKickmeRulesOutput(): string {
   return lines.join("\n");
 }
 
+// ── /dynamic ──────────────────────────────────────────────────────
+
+handlers.set("dynamic", (args: string): DispatchResult | null => {
+  if (!args) return listDynamicRules();
+
+  const tokens = args.split(/\s+/);
+  const first = tokens[0];
+
+  // /dynamic add <trigger> <context>
+  if (first === "add") {
+    const trigger = tokens[1];
+    const context = tokens.slice(2).join(" ");
+    if (!trigger) return { toast: "用法: /dynamic add <触发词> <注入内容>" };
+    const id = addDynamicRule({
+      trigger,
+      enabled: true,
+      matchType: "keyword",
+      context: context || `(当前对话涉及 ${trigger})`,
+      cooldown: 0,
+      lastTriggered: 0,
+    });
+    return { toast: `动态规则已添加: "${trigger}" (${id})` };
+  }
+
+  // /dynamic rm <id>
+  if (first === "rm") {
+    const id = tokens[1];
+    if (!id) return { toast: "用法: /dynamic rm <id>" };
+    if (removeDynamicRule(id)) return { toast: `规则已删除: ${id}` };
+    return { toast: `规则不存在: ${id}` };
+  }
+
+  // /dynamic on <id>
+  if (first === "on") {
+    const id = tokens[1];
+    if (!id) return { toast: "用法: /dynamic on <id>" };
+    const rules = getDynamicRules();
+    const rule = rules.find((r) => r.id === id);
+    if (!rule) return { toast: `规则不存在: ${id}` };
+    if (!rule.enabled) toggleDynamicRule(id);
+    return { toast: `规则已开启: ${rule.trigger}` };
+  }
+
+  // /dynamic off <id>
+  if (first === "off") {
+    const id = tokens[1];
+    if (!id) return { toast: "用法: /dynamic off <id>" };
+    const rules = getDynamicRules();
+    const rule = rules.find((r) => r.id === id);
+    if (!rule) return { toast: `规则不存在: ${id}` };
+    if (rule.enabled) toggleDynamicRule(id);
+    return { toast: `规则已关闭: ${rule.trigger}` };
+  }
+
+  // /dynamic cooldown <id> <seconds>
+  if (first === "cooldown") {
+    const id = tokens[1];
+    const seconds = parseInt(tokens[2], 10);
+    if (!id || Number.isNaN(seconds)) return { toast: "用法: /dynamic cooldown <id> <秒数>" };
+    if (setDynamicCooldown(id, seconds)) return { toast: `冷却时间已设置: ${seconds}s` };
+    return { toast: `规则不存在: ${id}` };
+  }
+
+  return { output: listDynamicRulesOutput() };
+});
+
+function listDynamicRules(): DispatchResult | null {
+  return { output: listDynamicRulesOutput() };
+}
+
+function listDynamicRulesOutput(): string {
+  const rules = getDynamicRules();
+  if (rules.length === 0) {
+    return "暂无动态规则。\n用法: /dynamic add <触发词> <注入内容>";
+  }
+  const lines: string[] = [];
+  lines.push(`╔══════════════════════════════════════╗`);
+  lines.push(`║ Dynamic 动态上下文注入规则             ║`);
+  lines.push(`╠══════════════════════════════════════╣`);
+  for (const rule of rules) {
+    const icon = rule.enabled ? "✅" : "⏸️";
+    const cd = rule.cooldown > 0 ? `[CD:${rule.cooldown}s]` : "    ";
+    const matchT = rule.matchType === "regex" ? "R" : "K";
+    lines.push(`║  ${icon}${cd} [${matchT}] ${rule.trigger.padEnd(16)}${rule.id.padEnd(12)}║`);
+    lines.push(`║      → ${(rule.context || "").slice(0, 36).padEnd(36)}║`);
+  }
+  lines.push(`║                                      ║`);
+  lines.push(`║  /dynamic add <触发词> <注入内容>     ║`);
+  lines.push(`║  /dynamic rm|on|off <id>             ║`);
+  lines.push(`║  /dynamic cooldown <id> <秒数>       ║`);
+  lines.push(`╚══════════════════════════════════════╝`);
+  return lines.join("\n");
+}
+
 // ====================================================================
 // /shellfix — 面板 + 帮助 + doctor
 // ====================================================================
@@ -702,6 +867,11 @@ function buildShellFixHelp(): string {
     `/auto show <module>         查看模块内容`,
     `/auto reset                 恢复默认`,
     `/auto conditions            条件管理`,
+    ``,
+    `/dynamic                    动态上下文注入规则`,
+    `/dynamic add <触发词> <内容> 添加规则`,
+    `/dynamic rm|on|off <id>     删除/开关规则`,
+    `/dynamic cooldown <id> <秒>  设置冷却时间`,
   ].join("\n");
 }
 
@@ -1046,6 +1216,25 @@ const tui: TuiPlugin = async (api, _options, _meta) => {
           } catch {}
         },
       },
+
+      // ── /dynamic ─────────────────────────────────────────────────
+      {
+        name: "shellfix.dynamic",
+        title: "ShellFix 动态上下文注入",
+        category: "ShellFix",
+        namespace: "palette",
+        slashName: "dynamic",
+        run() {
+          try {
+            api.ui.dialog?.clear?.();
+            dispatch(api, "dynamic", "").then((handled) => {
+              if (!handled) {
+                api.client?.tui?.executeCommand?.({ command: "|dynamic" });
+              }
+            });
+          } catch {}
+        },
+      },
     ],
   });
 
@@ -1118,6 +1307,32 @@ const tui: TuiPlugin = async (api, _options, _meta) => {
     }
   }
 
+  /**
+   * 检查动态上下文规则，匹配时将注入内容写入 pendingDynamic 缓存
+   * system.transform 钩子会消费此缓存
+   */
+  function checkDynamicRules(text: string): void {
+    if (!text) return;
+    const rules = getDynamicRules();
+    for (const rule of rules) {
+      if (!rule.enabled) continue;
+      if (isDynamicOnCooldown(rule)) continue;
+      const matched = rule.matchType === "regex"
+        ? new RegExp(rule.trigger, "i").test(text)
+        : text.toLowerCase().includes(rule.trigger.toLowerCase());
+      if (matched) {
+        markDynamicTriggered(rule.id);
+        const s = loadState();
+        if (!s.pendingDynamic) s.pendingDynamic = [];
+        if (!s.pendingDynamic.includes(rule.id)) {
+          s.pendingDynamic.push(rule.id);
+          saveState(s);
+        }
+        break; // 每条文本只触发第一个匹配规则
+      }
+    }
+  }
+
   // ── 订阅：用户消息被提交 ──────────────────────────────────────
   api.event.on("session.next.prompted", (event: any) => {
     try {
@@ -1129,6 +1344,7 @@ const tui: TuiPlugin = async (api, _options, _meta) => {
       if (text) setLastMessage(text);
       autoCollectTags(text);
       checkKickmeRules(text, "user");
+      checkDynamicRules(text);
     } catch { /* 静默 */ }
   });
 
@@ -1141,6 +1357,7 @@ const tui: TuiPlugin = async (api, _options, _meta) => {
       setLastMessage(text);
       autoCollectTags(text);
       checkKickmeRules(text, "llm");
+      checkDynamicRules(text);
     } catch { /* 静默 */ }
   });
 
