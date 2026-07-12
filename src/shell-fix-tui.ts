@@ -75,6 +75,21 @@ const PLUGIN_NAME = "ShellFix";
 const PLUGIN_VERSION = "1.6.0";
 
 // ====================================================================
+// 进程级缓存（不持久化）
+// ====================================================================
+
+/** 上一条消息缓存（用户消息或 LLM 回复） */
+let _lastMessage = "";
+
+function setLastMessage(text: string): void {
+  if (text) _lastMessage = text;
+}
+
+function getLastMessage(): string {
+  return _lastMessage;
+}
+
+// ====================================================================
 // 本地处理器注册表
 // ====================================================================
 
@@ -233,7 +248,12 @@ handlers.set("note", (args: string): DispatchResult | null => {
     const tag = saveMatch[1].trim();
     const content = saveMatch[2].trim();
     if (content === ":last") {
-      return { toast: ':last 暂不支持，请用 /note #tag#:内容 直接保存' };
+      const last = getLastMessage();
+      if (last) {
+        saveNote(tag, last);
+        return { toast: `笔记 #${tag}# 已保存（来自缓存）` };
+      }
+      return { toast: '缓存为空。先发送消息或等待 LLM 回复后再试。' };
     }
     saveNote(tag, content);
     return { toast: `笔记 #${tag}# 已保存` };
@@ -802,6 +822,80 @@ const tui: TuiPlugin = async (api, _options, _meta) => {
         },
       },
     ],
+  });
+
+  // ==================================================================
+  // 事件订阅
+  // ==================================================================
+
+  /**
+   * 辅助：从事件中提取文本内容
+   * 兼容不同的 event.data 结构。
+   */
+  function extractText(data: any): string {
+    if (!data) return "";
+    if (typeof data.text === "string") return data.text;
+    if (data.parts && Array.isArray(data.parts)) {
+      return data.parts
+        .map((p: any) => (p.type === "text" ? p.text : ""))
+        .join("\n");
+    }
+    if (data.content && typeof data.content === "string") return data.content;
+    return "";
+  }
+
+  /**
+   * 辅助：从文本中提取所有 #标签# 并自动保存笔记
+   */
+  function autoCollectTags(text: string): void {
+    if (!text) return;
+    const tagRe = /#([^#\s]+)#/g;
+    let match: RegExpExecArray | null;
+    while (true) {
+      match = tagRe.exec(text);
+      if (match === null) break;
+      const tag = match[1].trim();
+      if (!tag || tag.includes("#") || tag.includes(":")) continue;
+      // 提取标签后的一段内容作为笔记正文
+      const start = match.index + match[0].length;
+      const contextEnd = Math.min(start + 80, text.length);
+      const context = text.slice(match.index, contextEnd).replace(/\s+/g, " ").trim();
+      try {
+        saveNote(tag, context);
+        // 不弹 toast —— 批量采集时避免骚扰
+      } catch { /* 静默 */ }
+    }
+  }
+
+  // ── 订阅：用户消息被提交 ──────────────────────────────────────
+  api.event.on("session.next.prompted", (event: any) => {
+    try {
+      const data = event?.data;
+      if (!data) return;
+
+      // 1. 提取用户消息文本
+      const text = extractText(data);
+
+      // 2. 缓存为 lastMessage（供 :last 使用）
+      if (text) setLastMessage(text);
+
+      // 3. 自动采集文本中的 #标签#
+      autoCollectTags(text);
+    } catch { /* 静默 */ }
+  });
+
+  // ── 订阅：LLM 回复完成 ─────────────────────────────────────────
+  api.event.on("session.next.text.ended", (event: any) => {
+    try {
+      const text = extractText(event?.data);
+      if (!text) return;
+
+      // 1. 缓存为 lastMessage（供 :last 使用）
+      setLastMessage(text);
+
+      // 2. 自动采集 LLM 回复中的 #标签#
+      autoCollectTags(text);
+    } catch { /* 静默 */ }
   });
 };
 
