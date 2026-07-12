@@ -504,3 +504,96 @@ export function countTemplatesBySource(): { builtin: number; user: number; remot
   }
   return { builtin, user, remote };
 }
+
+// ====================================================================
+// 推送模板到远程仓库
+// ====================================================================
+
+export interface PushResult {
+  success: boolean;
+  message: string;
+  pushed: number;
+}
+
+/**
+ * 将用户模板推送到远程仓库
+ * @param templateNames 要推送的模板名列表（空数组=全部）
+ * @returns 推送结果
+ */
+export function pushTemplatesToRemote(templateNames: string[]): PushResult {
+  try {
+    // 1. 检查 remote/ 存在且为 Git 仓库
+    if (!existsSync(REMOTE_DIR)) {
+      return { success: false, message: "远程仓库目录不存在。请先 /my sync 克隆仓库。", pushed: 0 };
+    }
+    if (!existsSync(join(REMOTE_DIR, ".git"))) {
+      return { success: false, message: "remote/ 不是 Git 仓库。请重新 /my sync。", pushed: 0 };
+    }
+
+    // 2. 先拉取最新
+    try {
+      execSync(
+        `git -C "${REMOTE_DIR}" pull --rebase origin`,
+        { stdio: "pipe", timeout: 30000 },
+      );
+    } catch {
+      // pull 失败不阻塞推送
+    }
+
+    // 3. 收集要推送的模板
+    const idx = loadIndex();
+    const toPush = templateNames.length === 0
+      ? Object.entries(idx.templates).filter(([, t]) => !t.builtin)
+      : templateNames.map((name) => [name, idx.templates[name]] as const)
+          .filter(([, t]) => t && !t.builtin);
+
+    if (toPush.length === 0) {
+      return { success: false, message: "没有用户自定义模板可推送。", pushed: 0 };
+    }
+
+    // 4. 写入远程目录
+    let pushed = 0;
+    for (const [name, entry] of toPush) {
+      const filePath = join(REMOTE_DIR, `${name}.json`);
+      const content = JSON.stringify({
+        name,
+        template: entry.template,
+        description: entry.description || "",
+        builtin: false,
+        remote: true,
+      }, null, 2);
+      writeFileSync(filePath, content, "utf-8");
+      pushed++;
+    }
+
+    // 5. git add + commit + push
+    execSync(
+      `git -C "${REMOTE_DIR}" add -A`,
+      { stdio: "pipe", timeout: 10000 },
+    );
+    execSync(
+      `git -C "${REMOTE_DIR}" commit -m "shellfix: sync ${pushed} template(s)"`,
+      { stdio: "pipe", timeout: 10000 },
+    );
+    execSync(
+      `git -C "${REMOTE_DIR}" push origin HEAD`,
+      { stdio: "pipe", timeout: 60000 },
+    );
+
+    return {
+      success: true,
+      message: `成功推送 ${pushed} 个模板到远程仓库。`,
+      pushed,
+    };
+  } catch (e: any) {
+    const msg = e.message || String(e);
+    // 区分常见错误
+    if (msg.includes("Authentication failed") || msg.includes("auth")) {
+      return { success: false, message: "⚠️ 推送失败: 认证失败 — 请检查 Git 凭据", pushed: 0 };
+    }
+    if (msg.includes("timeout") || msg.includes("Could not read")) {
+      return { success: false, message: "⚠️ 推送失败: 网络超时 — 请检查网络连接", pushed: 0 };
+    }
+    return { success: false, message: `⚠️ 推送失败: ${msg}`, pushed: 0 };
+  }
+}

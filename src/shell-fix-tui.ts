@@ -41,6 +41,7 @@ import {
 import {
   listTemplates,
   getTemplate,
+  saveTemplate,
   renderTemplate,
   getNote,
   saveNote,
@@ -181,6 +182,21 @@ handlers.set("my", (args: string): DispatchResult | null => {
     const tmpl = getTemplate(rest);
     if (!tmpl) return { toast: `模板 "${rest}" 不存在` };
     return { output: `模板: ${tmpl.name}\n描述: ${tmpl.description || ""}\n${tmpl.builtin ? "内置" : "用户"}\n\n${tmpl.template}` };
+  }
+
+  // 编辑模式
+  if (first === "edit") {
+    const name = tokens[1];
+    if (!name) return { toast: "用法: /my edit <name> [新内容]" };
+    const tmpl = getTemplate(name);
+    if (!tmpl) return { toast: `模板 "${name}" 不存在` };
+    if (tmpl.builtin) return { toast: `⚠️ "${name}" 是内置模板，编辑将创建用户覆盖` };
+    const content = tokens.slice(2).join(" ");
+    if (content) {
+      saveTemplate({ name, template: content, description: tmpl.description });
+      return { toast: `模板 "${name}" 已更新` };
+    }
+    return { output: `模板: ${name}\n描述: ${tmpl.description || ""}\n\n当前内容:\n${tmpl.template}\n\n---\n用 /my edit ${name} <新内容> 保存` };
   }
 
   // 执行模板
@@ -425,14 +441,14 @@ function handleAutoConditions(args: string[]): DispatchResult | null {
 
   if (sub === "rm") {
     const idx = parseInt(subArgs[0], 10);
-    if (isNaN(idx)) return { toast: `用法: /auto conditions ${modName} rm <index>` };
+    if (Number.isNaN(idx)) return { toast: `用法: /auto conditions ${modName} rm <index>` };
     if (removeModuleCondition(modName, idx)) return { toast: `条件 [${idx}] 已删除` };
     return { toast: `索引无效: ${idx}` };
   }
 
   if (sub === "toggle") {
     const idx = parseInt(subArgs[0], 10);
-    if (isNaN(idx)) return { toast: `用法: /auto conditions ${modName} toggle <index>` };
+    if (Number.isNaN(idx)) return { toast: `用法: /auto conditions ${modName} toggle <index>` };
     const result = toggleModuleCondition(modName, idx);
     if (result === null) return { toast: `索引无效: ${idx}` };
     return { toast: `条件 [${idx}]: ${result ? "ON" : "OFF"}` };
@@ -636,13 +652,61 @@ const tui: TuiPlugin = async (api, _options, _meta) => {
             }
             api.ui.dialog?.replace?.(() =>
               api.ui.DialogSelect({
-                title: "选择模板",
-                options: all.map((t) => ({
-                  label: t.name,
-                  value: t.name,
-                  description: t.description || "",
-                })),
+                title: "模板系统",
+                options: [
+                  { label: "✏️ 编辑模板", value: "__edit__", description: "修改已保存的模板内容" },
+                  { label: "📋 查看全部", value: "__list__", description: "查看所有模板" },
+                  ...all.map((t) => ({
+                    label: t.name,
+                    value: t.name,
+                    description: t.description || "",
+                  })),
+                ],
                 onSelect: (name: string) => {
+                  if (name === "__edit__") {
+                    // 进入编辑模式：选择要编辑的模板
+                    const editable = all.filter((t) => !t.builtin);
+                    if (editable.length === 0) {
+                      api.ui.toast({ message: "没有可编辑的用户模板" });
+                      return;
+                    }
+                    api.ui.dialog?.replace?.(() =>
+                      api.ui.DialogSelect({
+                        title: "选择要编辑的模板",
+                        options: editable.map((t) => ({
+                          label: t.name,
+                          value: t.name,
+                          description: t.description || "",
+                        })),
+                        onSelect: (editName: string) => {
+                          const tmpl = getTemplate(editName);
+                          if (!tmpl) { api.ui.toast({ message: "不存在" }); return; }
+                          api.ui.dialog?.replace?.(() =>
+                            api.ui.DialogPrompt({
+                              title: `编辑模板 "${editName}"`,
+                              label: "新内容:",
+                              defaultText: tmpl.template,
+                              onConfirm: (content: string) => {
+                                if (content.trim()) {
+                                  saveTemplate({ name: editName, template: content, description: tmpl.description });
+                                  api.ui.toast({ message: `模板 "${editName}" 已更新` });
+                                  api.ui.dialog?.clear?.();
+                                } else {
+                                  api.ui.toast({ message: "内容不能为空" });
+                                }
+                              },
+                              onCancel: () => api.ui.dialog?.clear?.(),
+                            })
+                          );
+                        },
+                        onCancel: () => api.ui.dialog?.clear?.(),
+                      })
+                    );
+                  } else if (name === "__list__") {
+                    dispatch(api, "my", "?").then((handled) => {
+                      if (!handled) api.client?.tui?.executeCommand?.({ command: "|my ?" });
+                    });
+                  } else {
                   const tmpl = getTemplate(name);
                   if (!tmpl || !tmpl.template) {
                     api.ui.toast({ message: `模板 "${name}" 无内容` });
@@ -650,7 +714,7 @@ const tui: TuiPlugin = async (api, _options, _meta) => {
                   }
                   const paramCount = (tmpl.template.match(/\{(\d+)\}/g) || [])
                     .map((m) => parseInt(m.slice(1, -1), 10))
-                    .filter((n) => !isNaN(n))
+                    .filter((n) => !Number.isNaN(n))
                     .reduce((max, n) => Math.max(max, n), -1) + 1;
                   if (paramCount > 0) {
                     api.ui.dialog?.replace?.(() =>
@@ -671,13 +735,14 @@ const tui: TuiPlugin = async (api, _options, _meta) => {
                         onCancel: () => api.ui.dialog?.clear?.(),
                       })
                     );
-                  } else {
-                    const rendered = renderTemplate(tmpl.template, []);
-                    if (rendered) {
-                      api.client?.tui?.appendPrompt?.({ text: rendered });
-                      api.ui.dialog?.clear?.();
-                    } else {
-                      api.ui.toast({ message: "渲染失败" });
+} else {
+                      const rendered = renderTemplate(tmpl.template, []);
+                      if (rendered) {
+                        api.client?.tui?.appendPrompt?.({ text: rendered });
+                        api.ui.dialog?.clear?.();
+                      } else {
+                        api.ui.toast({ message: "渲染失败" });
+                      }
                     }
                   }
                 },

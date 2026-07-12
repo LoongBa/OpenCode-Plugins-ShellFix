@@ -94,9 +94,11 @@ import {
   cloneRemoteRepo,
   pullRemoteRepo,
   remoteRepoExists,
+  pushTemplatesToRemote,
   countTemplatesBySource,
   type TemplateEntry,
   type SyncResult,
+  type PushResult,
 } from "./lib/template-store";
 
 import {
@@ -367,7 +369,7 @@ export const ShellFixPlugin: Plugin = async () => {
 
       // 启用模块的注入
       for (const mod of AUTO_MODULES) {
-        if (shouldInjectModule(mod.name) && mod.content) {
+        if (getCachedShouldInject(mod.name) && mod.content) {
           chunks.push(mod.content);
         }
       }
@@ -483,7 +485,7 @@ function handleShellFixCommand(args: string): string {
     case "help":
       return buildShellFixHelp();
     default:
-      return `未知子命令: ${sub}\n\n${buildShellFixHelp()}`;
+      return `⚠️ 未知子命令: ${sub}\n\n${buildShellFixHelp()}`;
   }
 }
 
@@ -739,6 +741,30 @@ function getEnabledRuleNames(state: PluginState): CmdRuleName[] {
 // 条件引擎 — 检测函数
 // ====================================================================
 
+// ====================================================================
+// 条件评估缓存
+// ====================================================================
+
+let _conditionCache: Record<string, boolean> | null = null;
+
+function getCachedShouldInject(modName: string): boolean {
+  if (_conditionCache === null) {
+    _conditionCache = {};
+    for (const mod of AUTO_MODULES) {
+      _conditionCache[mod.name] = shouldInjectModule(mod.name);
+    }
+  }
+  return _conditionCache[modName] ?? false;
+}
+
+function clearConditionCache(): void {
+  _conditionCache = null;
+}
+
+// ====================================================================
+// 条件评估引擎
+// ====================================================================
+
 /** 简单的 glob 匹配（仅支持 * 通配） */
 function matchesGlob(value: string, pattern: string): boolean {
   if (pattern === "*" || pattern === "*/*") return true;
@@ -791,7 +817,6 @@ function toolExists(name: string): boolean {
 function fileExists(pattern: string): boolean {
   try {
     if (!pattern.includes("*")) return existsSync(pattern);
-    // glob 模式：尝试 readdir 匹配
     const parts = pattern.split(/[\\/]/);
     const dir = parts.length > 1 ? parts.slice(0, -1).join("/") : ".";
     const filePat = parts[parts.length - 1];
@@ -803,13 +828,9 @@ function fileExists(pattern: string): boolean {
   }
 }
 
-// ====================================================================
-// 条件引擎 — 评估
-// ====================================================================
-
 /** 评估单条条件是否匹配当前环境 */
 function evaluateCondition(cond: InjectCondition): boolean {
-  if (!cond.enabled) return true; // 跳过已禁用的条件
+  if (!cond.enabled) return true;
 
   switch (cond.predicate) {
     case "always":
@@ -854,21 +875,18 @@ function resolveGitBranchCached(): string {
 /** 判断模块是否应当注入（手动开关 + 条件评估） */
 function shouldInjectModule(modName: string): boolean {
   const s = loadState();
-  // 手动开关关闭 → 不注入
   if (!s.auto.modules[modName]) return false;
 
-  // 读取用户配置的条件（优先）或默认条件
   const conditions = s.auto.conditions[modName];
-  if (!conditions || conditions.length === 0) return true; // 无条件 → 按手动开关
+  if (!conditions || conditions.length === 0) return true;
 
-  // 所有条件必须匹配（AND 逻辑）
   return conditions.every((c) => evaluateCondition(c));
 }
 
 /** 获取当前实际活跃的注入模块名（经过条件过滤） */
 function getActiveInjectModules(): string[] {
   return AUTO_MODULES
-    .filter((m) => shouldInjectModule(m.name))
+    .filter((m) => getCachedShouldInject(m.name))
     .map((m) => m.name);
 }
 
@@ -956,6 +974,18 @@ function handleMyCommand(args: string): string {
       return handleMySync(tokens.slice(1));
     case "sync-config":
       return handleMySyncConfig(tokens.slice(1));
+    case "edit": {
+      const name = tokens[1];
+      if (!name) return "用法: /my edit <name> [新内容]";
+      const tmpl = getTemplate(name);
+      if (!tmpl) return `模板 "${name}" 不存在。`;
+      const content = tokens.slice(2).join(" ");
+      if (content) {
+        saveTemplate({ name, template: content, description: tmpl.description });
+        return `模板 "${name}" 已更新。`;
+      }
+      return `模板: ${name}\n描述: ${tmpl.description || ""}\n\n当前内容:\n${tmpl.template}\n\n---\n用 /my edit ${name} <新内容> 保存`;
+    }
     case "help":
       return [
         `模板系统帮助\n`,
@@ -1013,6 +1043,25 @@ function handleMySync(args: string[]): string {
     }
     lines.push(`║                                      ║`);
     lines.push(`║  内置: ${String(counts.builtin).padStart(2)}  用户: ${String(counts.user).padStart(2)}  远程: ${String(counts.remote).padStart(2)} ║`);
+    lines.push(`╚══════════════════════════════════════╝`);
+    return lines.join("\n");
+  }
+
+  // /my sync --push
+  if (flags.has("--push")) {
+    const config = getSyncConfig();
+    if (!config.repoUrl) return "未配置远程仓库。先用 /my sync-config set repo_url <url> 配置。";
+    const templateNames = args.filter((a) => !a.startsWith("--") && a !== sub);
+    const result: PushResult = pushTemplatesToRemote(templateNames);
+    const lines: string[] = [];
+    lines.push(`╔══════════════════════════════════════╗`);
+    lines.push(`║ 远程模板推送                          ║`);
+    lines.push(`╠══════════════════════════════════════╣`);
+    lines.push(`║ ${result.message.padEnd(38)}║`);
+    if (result.success) {
+      lines.push(`║                                      ║`);
+      lines.push(`║  已推送: ${String(result.pushed).padStart(2)} 个模板                ║`);
+    }
     lines.push(`╚══════════════════════════════════════╝`);
     return lines.join("\n");
   }
@@ -1220,6 +1269,8 @@ function handleNoteCommand(args: string): string {
 // ====================================================================
 
 function handleAutoCommand(args: string): string {
+  // 清除条件缓存，确保下次 system.transform 使用最新状态
+  clearConditionCache();
   if (!args) {
     const s = loadState();
     const enabled = getEnabledAutoModules();
@@ -1277,6 +1328,7 @@ function handleAutoCommand(args: string): string {
     const current = s.auto.modules[mod.name] ?? mod.defaultOn;
     const newVal = !current;
     setAutoModule(mod.name, newVal);
+    clearConditionCache();
     return `${mod.label}: ${newVal ? "ON ✅" : "OFF"}`;
   }
 
@@ -1445,7 +1497,7 @@ function handleInjectConditions(args: string[]): string {
   // /auto conditions <module> rm <index>
   if (sub === "rm") {
     const idx = parseInt(rest[1], 10);
-    if (isNaN(idx)) return `用法: /auto conditions ${modName} rm <index>`;
+    if (Number.isNaN(idx)) return `用法: /auto conditions ${modName} rm <index>`;
     if (removeModuleCondition(modName, idx)) {
       return `${modName}: 已删除条件 [${idx}]`;
     }
@@ -1455,7 +1507,7 @@ function handleInjectConditions(args: string[]): string {
   // /auto conditions <module> toggle <index>
   if (sub === "toggle" || sub === "tog") {
     const idx = parseInt(rest[1], 10);
-    if (isNaN(idx)) return `用法: /auto conditions ${modName} toggle <index>`;
+    if (Number.isNaN(idx)) return `用法: /auto conditions ${modName} toggle <index>`;
     const result = toggleModuleCondition(modName, idx);
     if (result === null) return `操作失败: 索引 ${idx} 无效`;
     return `${modName}[${idx}]: ${result ? "ON ✅" : "OFF ⏸️"}`;
