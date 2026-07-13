@@ -195,8 +195,7 @@ const EXPORT_LINE_RE =
   /^\s*export\s+((?:\w+=(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\S+)\s*)+)(.*)$/s;
 
 const ENCODING_PREFIX =
-  "$OutputEncoding=[Text.UTF8Encoding]::new($false);" +
-  "[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false);";
+  "$z=[Text.Encoding]::UTF8;$OutputEncoding=[Console]::OutputEncoding=$z;";
 
 const PLUGIN_NAME = "ShellFix";
 

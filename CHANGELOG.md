@@ -1,5 +1,14 @@
 # Changelog
 
+## v2.1.1 (2026-07-13)
+
+### 优化
+
+- **编码前缀压缩**：120 字符 → 69 字符（-42%），每条命令节省 ~12 tokens
+  - 旧：`$OutputEncoding=[Text.UTF8Encoding]::new($false);[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false);`
+  - 新：`$z=[Text.Encoding]::UTF8;$OutputEncoding=[Console]::OutputEncoding=$z;`
+  - 原理：共用变量 + 链式赋值，消除重复对象创建
+
 ## v2.1.0 (2026-07-13)
 
 ### 第四基础支柱 — Git 环境净化
