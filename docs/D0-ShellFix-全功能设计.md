@@ -1,88 +1,100 @@
 # ShellFix 完整设计方案
 
-> 一个插件，四支柱 + 执行层 + TUI 调度器
-> 当前版本 v1.6.0（未提交）→ 目标版本 v1.7.0
+> 一个插件，三大修复 + TUI 调度器 + MCP
+> 当前版本 v2.2.2
 
 ---
 
 ## 1. 体系概述
 
-### 四命令 + 平台修复
+### 命令体系
 
 ```
-┌──────────┬──────────────┬──────────────────┬────────────────────────┐
-│  命令     │  类别        │  触发方式        │  一句话                │
-├──────────┼──────────────┼──────────────────┼────────────────────────┤
-│ /shellfix │ 平台修复     │ 手动 / 自动      │ "让 PowerShell 好用"    │
-│ /my       │ 模板系统     │ 手动            │ "帮我省打字"            │
-│ /note     │ 笔记系统     │ 手动 / 自动      │ "记录和复用心智"        │
-│ /auto     │ 自动化系统   │ 自动 + 手动管理  │ "让 AI 更懂上下文"      │
-└──────────┴──────────────┴──────────────────┴────────────────────────┘
+斜杠命令（仅 2 个）：/my  /auto
+Ctrl+P palette：13 个子命令，统一在 ShellFix 分组下
 ```
+
+| 入口 | 类型 | 一句话 |
+|------|------|--------|
+| `status` | palette | 所有配置一览 |
+| `encoding` | palette | 中文不乱码 |
+| `bash` | palette | bash→PowerShell 适配 |
+| `log` | palette | 记录操作信息 |
+| `git-env` | palette | 16 个非交互变量避免等待 |
+| `git-eol` | palette | 避免换行警告 |
+| `kickme` | palette | 关键词通知 |
+| `banner` | palette | 启动版本信息开关 |
+| `sysinfo` | palette | 查看系统信息 |
+| `about` | palette | 版本与更新 |
+| `help` | palette | 命令参考 |
+| `/my` | slash + palette | 预设文本模板 |
+| `/auto` | slash + palette | 自动注入上下文 |
 
 ### 架构分层
 
 ```
 ShellFix
 │
-├── 📡 会话层（四命令）—— 作用于输入框和 LLM 回复
-│   │                  所有命令优先在 TUI 侧本地处理
-│   │
-│   ├── /auto    自动化规则定义
-│   │   ├── session_start → inject_system_prompt（旧注入模块）
-│   │   ├── user_input    → replace / warn（拦截替换）
-│   │   ├── llm_output    → collect / notify（自动采集）
-│   │   └── 规则管理：list / on/off / mode / require / conditions
-│   │
-│   ├── /my      手动使用模板
-│   │   ├── 渲染 {0}{branch}{date} → appendPrompt 填入输入框
-│   │   ├── CRUD：save / rm / show / edit / list / ?
-│   │   └── 同步：sync / sync-config / sync --push
-│   │
-│   ├── /note    手动采集笔记
-│   │   ├── #tag#:content 保存 → toast
-│   │   ├── #tag# 取出 → appendPrompt
-│   │   ├── #tag#:last / cache 缓存上条消息
-│   │   └── 层级标签浏览：? / ? <prefix> / rm
-│   │
-│   └── /kickme  [规划] 条件通知
-│       ├── event.on → 匹配条件 → toast + 声音
-│       └── 共享条件引擎（与 /auto 同）
+├── TUI 调度器（13 条 palette 命令）
+│   ├── status        状态总览
+│   ├── encoding      编码注入开关
+│   ├── bash          bash→PowerShell 适配
+│   ├── log           日志开关
+│   ├── git-env       非交互环境变量
+│   ├── git-eol       换行符警告处理
+│   ├── kickme        关键词通知（用法帮助）
+│   ├── banner        启动版本信息开关
+│   ├── sysinfo       系统诊断
+│   ├── about         版本与更新检测
+│   ├── help          命令参考
+│   ├── /my           模板系统
+│   └── /auto         自动化系统
 │
-├── 🔧 执行层（/shellfix）—— 作用于 shell 命令
-│   ├── shell.env → 16 Git 免交互变量
-│   ├── tool.execute.before → 编码注入 + 6条命令替换
-│   └── 管理：cmd / encoding / log / doctor
+├── 🔧 执行层（shell-fix.ts）
+│   ├── shell.env → 16 个非交互环境变量
+│   ├── tool.execute.before → 编码注入 + 6 条命令替换
+│   ├── experimental.session.compacting → 保护关键上下文
+│   └── experimental.chat.system.transform → 自动注入
 │
 └── ⚙️ 系统层
-    ├── TUI 调度器：dispatch → local handler → appendPrompt/showToast
-    │   └── 未匹配 → 回退到服务器 command.execute.before（无 LLM）
+    ├── TUI 本地处理：dispatch → 本地 handler → toast/dialog
     ├── 状态持久化：~/.config/opencode/shellfix-state.json
-    ├── 条件引擎：os/arch/branch/dirty/tool_exists/file_exists/is_git_repo
-    └── 事件订阅：event.on("session.next.*") → 自动触发 /auto /kickme
+    ├── 版本号：单一事实来源 src/lib/state.ts PLUGIN_VERSION
+    ├── 分组标题：ShellFix vX.Y.Z（黄色标签，Ctrl+P 可见）
+    └── 启动日志：可由 banner 开关控制显示
 ```
 
 ### 前缀设计原则
 
-- `/shellfix` — 保留原名，避免与其它插件撞车
+- `ShellFix` — palette 分组前缀，所有子命令统一归在黄色标签下
 - `/my` — 短且低频，不会被自然语言误触发
-- `/note` — 直观
-- `/auto` — 旧名 `/in`（v1.6→v1.7 重命名），涵盖自动化语义
+- `/auto` — 涵盖自动化语义
 
 ---
 
-## 2. 命令体系总表
+## 2. Palette 命令总表（Ctrl+P）
 
 ```
-/shellfix <sub> [args]    — 平台修复管家
-├── (无参数)               → 状态面板
-├── cmd [name] [on/off]   → 命令替换规则管理
-├── encoding [on/off]     → 编码注入控制
-├── log [on/off]          → 日志输出控制
-├── doctor                → 环境诊断
-└── help                  → 帮助
+ShellFix v2.2.2  ← 黄色分组标题
+├── status       状态总览
+├── encoding     中文不乱码
+├── bash         适配 Powershell 避免出错
+├── log          记录操作信息
+├── git-env      避免等待交互
+├── git-eol      避免换行警告
+├── kickme       关键词通知
+├── banner       启动版本信息
+├── sysinfo      查看系统信息
+├── about        版本与更新
+├── help         命令参考
+├── my           预设文本模板
+└── auto         自动注入上下文
+```
 
-/my <sub> [args...]       — 模板系统
+### 斜杠命令（2 个）
+
+```
+/my <sub> [args...]       — 模板系统（slash + palette）
 ├── ?                     → 列出所有模板
 ├── ? <name>              → 预览模板内容
 ├── <name> [args...]      → 渲染模板，填入输入框
@@ -93,16 +105,7 @@ ShellFix
 ├── sync                  → 同步远程仓库
 └── sync-config           → 同步配置管理
 
-/note <sub> [args]        — 笔记系统
-├── ?                     → 列出所有顶层标签
-├── ? <prefix>            → 浏览标签树
-├── #tag#                 → 注入笔记内容到输入框
-├── #tag#:<content>       → 保存笔记
-├── #tag#:last            → 保存上一条消息
-├── cache <text>          → 手动缓存消息
-└── rm #tag#              → 删除笔记
-
-/auto <sub> [args]        — 自动化系统
+/auto <sub> [args]        — 自动化系统（slash + palette）
 ├── list                  → 列出所有模块 + 状态
 ├── <module>              → 切换模块开关
 ├── mode [prompt|auto|silent] → 设置模式
@@ -113,6 +116,15 @@ ShellFix
 ├── conditions [args]     → 条件引擎管理
 └── help                  → 帮助
 ```
+
+### 已移除的命令（v2.2）
+
+| 命令 | 原因 |
+|------|------|
+| `/shellfix` | 配置功能迁移到 palette |
+| `/note` | 笔记功能未被使用，V3 规划 tag 系统替代 |
+| `/kickme` | 通知规则管理通过 LLM 斜杠命令，palette 仅展示帮助 |
+| `/dynamic` | 动态上下文未被使用 |
 
 ---
 
@@ -150,10 +162,19 @@ ShellFix
 
 | 命令 | TUI 本地处理 | 服务器回退项 |
 |------|------------|-------------|
-| `/shellfix` | 面板 / cmd / encoding / log / doctor / help | — |
-| `/my` | ? / 渲染 / show | save / rm / edit / sync |
-| `/note` | ? / #tag# / #tag#:content / rm | :last / cache |
-| `/auto` | list / 切换 / mode / require / show / reset / conditions | — |
+| `status` | DialogAlert 展示所有开关状态 | — |
+| `encoding` | toggle + toast | — |
+| `bash` | DialogSelect 切换 6 条规则 | — |
+| `log` | toggle + toast | — |
+| `git-env` | DialogAlert 展示 16 个变量 | — |
+| `git-eol` | DialogSelect 三选一模式 | — |
+| `kickme` | DialogAlert 展示规则数量 + 用法 | — |
+| `banner` | toggle + toast | — |
+| `sysinfo` | DialogAlert 展示 OS/Shell 版本 | — |
+| `about` | DialogAlert + GitHub API 检测更新 | — |
+| `help` | DialogAlert 命令参考 | — |
+| `/my` | 模板选择/编辑/渲染 | save / rm / edit / sync |
+| `/auto` | 模块切换/模式设置/列表 | — |
 
 ---
 
@@ -352,30 +373,30 @@ interface PluginState {
 ## 10. 版本规划
 
 ```
-v1.6.0 — 平台基础（已完成，未提交）
-├── /auto 模块化 + 条件引擎（旧名 /in）
-├── 代码模块化：state / template-store / auto-rules
-├── TUI 调度器：dispatch → 本地 handler
-├── TUI API 修复：api.tui → api.client.tui
-└── /auto 重命名（原 /in）
-
-v1.7.0 — 增强与稳定（规划中）
-├── /my 增强：edit / sync --push
-├── /note 增强：:last 真正实现 / cache 手动缓存
-├── 事件订阅：event.on → 自动采集 #标签#
-├── 全面错误处理 + 统一错误格式
-└── 性能优化：条件评估缓存 / 分支名缓存
-
-v1.8.0 — 自动化升级
-├── /kickme 通知系统
-├── /auto 自动化管线（user_input / llm_output 拦截）
-├── 会话级自动注入（TUI 启动提示）
-└── 标签 timeline 浏览
-
-v2.0.0 — 正式版
-├── 全量文档 + CHANGELOG
-├── 完整测试覆盖
-└── MCP Server（可选）
+v2.2.x — 当前系列
+├── v2.2.0  命令体系精简：移除 4 个斜杠命令，保留 /my /auto
+├── v2.2.1  单面板→独立 palette 子命令 + 分组标题显示版本号
+├── v2.2.2  标题规范化（无 emoji，ShellFix [英文] [简介]）
+│           git-env/banner/kickme 新增入口
+│           sysinfo/bash 改名
+│           TUI/逻辑分离
+│           启动日志开关
+│
+v3.0（规划）
+├── Tag 系统：自动/手动打标签
+│   ├── 注入提示词让 LLM 根据规则自动打标签
+│   └── experimental.session.compacting 保护标签不被压缩
+├── MCP Server
+│   ├── Resources：按标签浏览/检索
+│   ├── Tools：CRUD 标签（LLM 可直接管理）
+│   └── Notifications：标签变化事件
+├── 外部通知系统
+│   ├── api.ui.toast() 即时气泡
+│   └── BurntToast 系统通知（Windows Action Center）
+└── kickme 增强
+    ├── 条件规则引擎
+    ├── 频率限制/冷却
+    └── 跨会话匹配
 ```
 
 ---
@@ -406,11 +427,95 @@ OpenCode-Plugins-ShellFix/
 
 ## 12. 命名变更记录
 
-| v1.6.0 | v1.7.0 | 原因 |
-|--------|--------|------|
-| `inject-modules.ts` | `auto-rules.ts` | /in → /auto 重命名 |
-| `InjectState` / `InjectMode` | `AutoState` / `AutoMode` | 同上 |
-| `INJECT_MODULES` | `AUTO_MODULES` | 同上 |
-| `/in` 命令 | `/auto` 命令 | 语义扩展：注入 → 自动化 |
-| `api.tui.executeCommand` | `api.client.tui.executeCommand` | API 路径修复 |
-| 三支柱 | 四支柱 + 执行层 | 架构升级 |
+| v1.6.0 | v1.7.0 | v2.2.x | 原因 |
+|--------|--------|--------|------|
+| `inject-modules.ts` | `auto-rules.ts` | — | /in → /auto |
+| `InjectState` / `InjectMode` | `AutoState` / `AutoMode` | — | 同上 |
+| `INJECT_MODULES` | `AUTO_MODULES` | — | 同上 |
+| `/in` | `/auto` | — | 语义扩展 |
+| `api.tui.executeCommand` | `api.client.tui.executeCommand` | — | API 路径修复 |
+| — | 三支柱 + 执行层 | 13 条 palette + 2 slash | 体系升级 |
+| — | — | `doctor` → `sysinfo` | 更直观 |
+| — | — | `cmd` → `bash` | 语义更准 |
+| — | — | `/shellfix` `/note` `/kickme` `/dynamic` | 移除，迁移到 palette |
+
+---
+
+## 13. V3 规划 — 外部通知系统
+
+### 13.1 动机
+
+kickme 目前通过 `api.ui.toast()` 在 OpenCode 内弹气泡，但：
+- 用户关闭 OpenCode 或切到后台时看不到
+- 无法做到 Windows 系统级通知（Action Center 留存）
+- 缺乏按钮/输入等交互能力
+
+### 13.2 方案对比
+
+| 方案 | 原理 | 延迟 | 功能 | 集成难度 |
+|------|------|------|------|---------|
+| `api.ui.toast()` | OpenCode TUI API | 0ms | 纯文本气泡 | 零 |
+| **BurntToast** (PowerShell) | WinRT Toast API | ~300-800ms/次 | 按钮/输入/图片/进度条/Action Center | 低（execSync 调用） |
+| node-notifier | SnoreToast.exe C++ 子进程 | ~50-100ms | 基础 toast（按钮有 bug） | 中（需打包 exe） |
+| node-powertoast + NodeRT | 原生 WinRT 绑定 | ~50ms | 全功能 | 中（需编译） |
+
+**推荐方案：BurntToast**
+
+优势：
+- 纯 PowerShell 模块，无需编译
+- 支持按钮、输入框、选择框、进度条、Hero 图片
+- `-Urgent` 参数可突破 Focus Assist
+- Action Center 完整集成（历史记录、分组、替换）
+- 事件回调（Activated/Dismissed/Failed）支持
+
+劣势：
+- 每次 spawn PowerShell 进程开销 ~300-800ms
+- 需要用户预先 `Install-Module -Name BurntToast`
+- 自定义 AppId 在 v1.0.0 被移除（显示为 PowerShell）
+
+### 13.3 架构设计
+
+```
+kickme 关键词匹配 → api.ui.toast()       ← 即时气泡（OpenCode 内）
+                  ↓ 条件满足时追加
+            spawn BurntToast              ← 系统通知（Windows Action Center）
+                  ↓
+            New-BurntToastNotification
+              -Text "消息内容"
+              -Button "打开" -Arguments "url"
+              -Urgent (突破专注助手)
+              -UniqueIdentifier (去重/替换)
+```
+
+**调用方式（从 TUI 插件）：**
+
+```typescript
+const { execSync } = require("child_process");
+execSync(
+  `powershell -NoProfile -Command "Import-Module BurntToast; New-BurntToastNotification -Text '${msg}' -Button '打开' -Arguments '...'"`,
+  { timeout: 5000, windowsHide: true }
+);
+```
+
+**优化方案：** 保持一个常驻 PowerShell 进程，通过 stdin 管道输入命令，避免每次 spawn 的 ~300ms 进程创建开销。
+
+### 13.4 V3 路线图
+
+| 阶段 | 内容 | 优先级 |
+|------|------|--------|
+| P0 | kickme 恢复为 palette 入口 + 斜杠命令管理 | ✅ 已完成 |
+| P1 | 定义 Windows 通知条件规则（匹配变体/频率限制） | 高 |
+| P2 | 集成 BurntToast 作为系统通知后端 | 高 |
+| P3 | 新增 note/tag + notification MCP Server | 中 |
+|   | - MCP 资源：`shellfix://kickme/rules` | |
+|   | - MCP 工具：`kickme_add_rule` / `kickme_send_notification` | |
+|   | - MCP 通知：事件驱动，LLM 可调用 | |
+| P4 | 跨平台通知（macOS: notification-center, Linux: notify-send）| 低 |
+
+### 13.5 技术约束
+
+- BurntToast 要求 Windows 10+ / Server 2019+
+- 无管理员权限也可运行（需 `-Scope CurrentUser` 安装模块）
+- SYSTEM 账户下不能直接弹通知（需 `Invoke-Command` 回用户会话）
+- 通知时长：标准 7s / 长 25s（无法常驻，除非用 `IncomingCall` 场景）
+- 点击事件需要 PowerShell 进程保持存活

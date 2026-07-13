@@ -1,5 +1,57 @@
 # Changelog
 
+## v2.2.2 (2026-07-14)
+
+### 微调 — Palette 标题 + 新功能
+
+- **标题统一**：改为 `ShellFix [英文名] [简介]`，如 `ShellFix encoding 中文不乱码`，去掉表情符号
+- **bash**: 改名+重定向（cmd→bash），介绍"适配 Powershell 避免出错"
+- **sysinfo**: doctor→sysinfo，更直观
+- **git-env**: 新增入口，展示 16 个非交互变量，提示关闭官方插件省 Token
+- **kickme**: 加回 palette，显示规则数量和用法
+- **banner**: 新增启动版本信息开关 (toggleShowVersion)
+- **about**: 加入项目 GitHub 地址 + 作者 loongba.cn
+- **status**: 更新显示所有模块状态（含 kickme/banner）
+- 启动日志支持 showVersion 开关控制
+
+## v2.2.1 (2026-07-13)
+
+### 微调 — 分组标题 + 环境诊断增强
+
+- **版本号移到黄色分组标题**：所有 ShellFix palette 命令共用 `ShellFix v2.2.1` 分组（Ctrl+P 黄色标签），入口标题不再显示版本号
+- **环境诊断加入 Shell 版本**：Windows 检测 PowerShell 版本，Linux/macOS 检测 Bash 版本
+- **新增 `shellfix.about`**：显示版本信息 + 通过 GitHub API 自动检测最新版本
+- **新增 `shellfix.help`**：独立帮助入口
+- **单面板→独立子命令**：撤销原来统一的 DialogSelect 面板，改为 8 条独立 palette TuiCommand，每条直接执行目标操作，无需子菜单
+- `deploy.ps1` 修复：增加 lib/ 目录部署，动态读取版本号
+
+## v2.2.0 (2026-07-13)
+
+### 架构变更 — 命令系统精简
+
+- **移除 4 个斜杠命令**：`/shellfix`、`/note`、`/kickme`、`/dynamic` 不再注册到 `opencode.jsonc` 和 `command.execute.before` 钩子
+- **保留命令**：仅 `/my`（模板系统）和 `/auto`（自动化系统）
+- `PIPE_CMD_RE` / `SLASH_CMD_RE` 简化为仅匹配 `my` 和 `auto`
+
+### 新功能 — Ctrl+P Palette 修复配置
+
+- 新增 `shellfix` palette 命令：通过 Ctrl+P 打开统一配置面板
+- 支持交互式设置：
+  - **状态总览** — 一览所有开关状态
+  - **编码注入** — 一键切换 ON/OFF
+  - **命令规则** — 逐条开关 export/which/source/touch/rm/chmod
+  - **日志** — 一键切换 ON/OFF
+  - **Git 换行符** — 选择 auto/config/off 模式
+  - **环境诊断** — 查看 OS/版本/架构等
+  - **帮助** — palette 命令说明
+- 纯 TUI 侧 DialogSelect 交互，零 LLM 成本
+
+### 代码清理
+
+- TUI 插件：移除 600+ 行死代码（note/kickme/dynamic handler、autoCollectTags、checkKickmeRules、checkDynamicRules、_lastMessage 缓存、事件钩子订阅、shellfix 子命令处理器）
+- 服务器插件：移除 `tool.execute.after` 钩子、`_gitLineEndingNotified`、`handleShellFixCommand`/`handleNoteCommand`/`handleKickmeCommand`/`handleDynamicCommand` 及相关函数
+- cleaned up 导入依赖
+
 ## v2.1.1 (2026-07-13)
 
 ### 优化
