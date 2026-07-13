@@ -10,13 +10,15 @@
 
 在 Windows 上用 OpenCode 的开发者都遇到过：
 
-### 1. export 命令错误
+### 1. export 命令错误，浪费 Token 还降智！
 
-OpenCode 调用 bash 工具时，在 Windows Powershell 环境下经常调用错误，怎么也改不过来。多说几次 Agent 回答：被你抓住了，我又犯错误了，看来形成肌肉记忆了。这次一定改正！
+OpenCode 调用 bash 工具时，在 Windows Powershell 环境下经常调用错误，怎么也改不过来。多说几次 Agent 回答：
+
+> 被你抓住了，我又犯错误了，看来形成肌肉记忆了。这次一定改正！
 
 然后，依然是错的，摆烂。
 
-但这样浪费对话不说，大量的错误信息充斥上下文，浪费 Token 还降智！
+但这样浪费对话不说，大量的错误信息充斥上下文，**浪费 Token 还降智**！
 
 ```bash
 # Agent 输出这个（Linux bash 语法）👇
@@ -109,6 +111,20 @@ Agent 生成的 Linux export 语法被自动拦截并转换为 PowerShell 兼容
 | `HOMEBREW_NO_AUTO_UPDATE` | `1`              | Homebrew 自动更新                     |
 
 > 这些变量通过 `shell.env` 注入进程环境，**不写进命令字符串**。
+
+#### 对比：官方 non-interactive-env 插件
+
+OpenCode 内置的 `oh-my-openagent` 插件用 `tool.execute.before` 注入同样的 Git 免交互变量，但方式是**命令前缀**：
+
+```powershell
+$env:CI="true";$env:DEBIAN_FRONTEND="noninteractive";... <你的命令>
+```
+
+每条命令都被追加一长串环境变量赋值。ShellFix 用 `shell.env` 进程级注入，**命令字符串零污染**。两者同时启用时建议在 `~/.config/opencode/oh-my-openagent.jsonc` 中禁用内置插件：
+
+```jsonc
+{ "disabled_hooks": ["non-interactive-env"] }
+```
 
 ### ④ Git 换行符降噪 — 节省 Token
 
