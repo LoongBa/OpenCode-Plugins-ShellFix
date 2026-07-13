@@ -2,13 +2,21 @@
 
 **Windows PowerShell 三大修复 + 六命令体系**
 
-当前版本：**v2.0.0**
+当前版本：**v2.1.1**
 
 ---
 
-## 痛点
+## 核心：命令错误、中文乱码、降噪压缩 Token、梳理上下文
 
 在 Windows 上用 OpenCode 的开发者都遇到过：
+
+### 1. export 命令错误
+
+OpenCode 调用 bash 工具时，在 Windows Powershell 环境下经常调用错误，怎么也改不过来。多说几次 Agent 回答：被你抓住了，我又犯错误了，看来形成肌肉记忆了。这次一定改正！
+
+然后，依然是错的，摆烂。
+
+但这样浪费对话不说，大量的错误信息充斥上下文，浪费 Token 还降智！
 
 ```bash
 # Agent 输出这个（Linux bash 语法）👇
@@ -19,7 +27,9 @@ export DB_HOST=localhost
 'export' 不是内部或外部命令，也不是可运行的程序或批处理文件。
 ```
 
-以及：
+### 2. 中文乱码
+
+比如读取文件列表，遇到中文返回乱码。所以，上下文中充斥着大量乱码。
 
 ```powershell
 # 中文输出全是乱码 ❌
@@ -27,13 +37,17 @@ Write-Output "你好世界"
 # 输出：浣犲ソ涓栫晫
 ```
 
-还有：
+### 3. 大量重复信息占用上下文，浪费 token
+
+OpenCode 内置消除 git 等待交互的插件，但它会注入大量信息：
 
 ```powershell
 # Git 卡住等待交互式输入 ❌
 git commit -m "fix"
 # 等待编辑器、等待凭据、进入分页器...
 ```
+
+### 4. 复制粘贴
 
 以及日常开发中的重复性劳动：
 
@@ -50,65 +64,84 @@ git commit -m "fix"
 
 ---
 
-## 三大基础修复
+## 四大基础修复
 
 ### ① 中文不乱码
 
 `tool.execute.before` 钩子在每条命令前自动注入 UTF-8 编码设置：
 
 ```powershell
-$OutputEncoding=[Text.UTF8Encoding]::new($false);
-[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false);
+$z=[Text.Encoding]::UTF8;$OutputEncoding=[Console]::OutputEncoding=$z;
 ```
 
-PowerShell 非交互子进程默认输出编码为系统代码页（Windows 常见 GBK），导致中文乱码。插件的编码前缀强制设置管道和控制台编码为 UTF-8。
+PowerShell 非交互子进程默认输出编码为系统代码页（Windows 常见 GBK），导致中文乱码。插件强制设置管道和控制台编码为 UTF-8。
+
+> 优化：v2.1.1 将前缀从 120 字符压缩至 69 字符（-42%），每条命令节省 ~12 tokens。
 
 ### ② export → $env: 自动转换
 
 Agent 生成的 Linux export 语法被自动拦截并转换为 PowerShell 兼容写法：
 
-| Agent 输出 | 插件转换后 |
-|-----------|-----------|
-| `export FOO=bar` | `$env:FOO="bar";` |
-| `export FOO="hello world"` | `$env:FOO="hello world";` |
-| `export FOO='hello $PATH'` | `$env:FOO="hello \`$PATH";` |
+| Agent 输出                   | 插件转换后                           |
+| ---------------------------- | ------------------------------------ |
+| `export FOO=bar`             | `$env:FOO="bar";`                    |
+| `export FOO="hello world"`   | `$env:FOO="hello world";`            |
+| `export FOO='hello $PATH'`   | `$env:FOO="hello \`$PATH";`          |
 | `export K1=v1 K2=v2 && make` | `$env:K1="v1";$env:K2="v2"; && make` |
 
 ### ③ Git 免交互
 
 通过 `shell.env` 钩子在**进程初始化时**注入 16 个非交互环境变量，子进程自动继承，无需写进命令字符串：
 
-| 变量 | 值 | 防止 |
-|------|-----|------|
-| `CI` | `true` | 工具检测到 CI 后禁用交互模式 |
-| `GIT_TERMINAL_PROMPT` | `0` | Git 弹出凭据询问窗口 |
-| `GIT_EDITOR` / `EDITOR` | `:` | Git 打开编辑器等你写 commit message |
-| `GIT_PAGER` / `PAGER` | `cat` | `git log` / `git diff` 进入分页器阻塞 |
-| `GCM_INTERACTIVE` | `never` | Git 凭据管理器弹窗 |
-| `GIT_SEQUENCE_EDITOR` | `:` | `git rebase` 交互编辑 |
-| `GIT_MERGE_AUTOEDIT` | `no` | `git merge` 打开编辑器 |
-| `VISUAL` | `""` | 覆盖 `$VISUAL` |
-| `npm_config_yes` | `true` | `npx` 弹确认 |
-| `PIP_NO_INPUT` | `1` | `pip` 非输入模式 |
-| `DEBIAN_FRONTEND` | `noninteractive` | `apt` 等工具非交互 |
-| `HOMEBREW_NO_AUTO_UPDATE` | `1` | Homebrew 自动更新 |
+| 变量                      | 值               | 防止                                  |
+| ------------------------- | ---------------- | ------------------------------------- |
+| `CI`                      | `true`           | 工具检测到 CI 后禁用交互模式          |
+| `GIT_TERMINAL_PROMPT`     | `0`              | Git 弹出凭据询问窗口                  |
+| `GIT_EDITOR` / `EDITOR`   | `:`              | Git 打开编辑器等你写 commit message   |
+| `GIT_PAGER` / `PAGER`     | `cat`            | `git log` / `git diff` 进入分页器阻塞 |
+| `GCM_INTERACTIVE`         | `never`          | Git 凭据管理器弹窗                    |
+| `GIT_SEQUENCE_EDITOR`     | `:`              | `git rebase` 交互编辑                 |
+| `GIT_MERGE_AUTOEDIT`      | `no`             | `git merge` 打开编辑器                |
+| `VISUAL`                  | `""`             | 覆盖 `$VISUAL`                        |
+| `npm_config_yes`          | `true`           | `npx` 弹确认                          |
+| `PIP_NO_INPUT`            | `1`              | `pip` 非输入模式                      |
+| `DEBIAN_FRONTEND`         | `noninteractive` | `apt` 等工具非交互                    |
+| `HOMEBREW_NO_AUTO_UPDATE` | `1`              | Homebrew 自动更新                     |
 
 > 这些变量通过 `shell.env` 注入进程环境，**不写进命令字符串**。
+
+### ④ Git 换行符降噪 — 节省 Token
+
+`git diff`/`git add`/`git commit` 时 Git 常刷一堆换行符警告：
+
+```
+warning: in the working copy of 'foo.ts', LF will be replaced by CRLF the next time Git touches it
+```
+
+这是纯噪声：**不改变行为、浪费 token、干扰 Agent**。通过 `GIT_CONFIG_COUNT` 环境变量注入 `core.autocrlf=false` + `core.safecrlf=false`，静默消除：
+
+| 模式           | 方式                            | 生效范围         |
+| -------------- | ------------------------------- | ---------------- |
+| `auto`（默认） | `shell.env` 注入                | 仅 OpenCode 进程 |
+| `config`       | 输出 `git config --global` 命令 | 系统全局         |
+| `off`          | 不注入                          | —                |
+
+命令：`/shellfix git-line-ending auto|config|off`
 
 ---
 
 ## 六命令体系
 
-除三大修复外，还提供 6 个命令，所有命令**优先在 TUI 侧本地处理**，零 LLM 成本。
+除四大修复外，还提供 6 个命令，所有命令**优先在 TUI 侧本地处理**，零 LLM 成本。
 
-| 命令 | 类别 | 一句话 |
-|------|------|--------|
-| `/shellfix` | 平台管家 | 三大修复的开关 + 诊断 |
-| `/my` | 模板系统 | "帮我省打字" — 预设文本模板 |
-| `/note` | 笔记系统 | "记录和复用心智" |
-| `/auto` | 自动化系统 | 自动注入上下文到 system prompt |
-| `/kickme` | 通知系统 | 关键词匹配时弹 toast 通知 |
-| `/dynamic` | 动态上下文 | 关键词触发时自动注入上下文 |
+| 命令        | 类别       | 一句话                         |
+| ----------- | ---------- | ------------------------------ |
+| `/shellfix` | 平台管家   | 三大修复的开关 + 诊断          |
+| `/my`       | 模板系统   | "帮我省打字" — 预设文本模板    |
+| `/note`     | 笔记系统   | "记录和复用心智"               |
+| `/auto`     | 自动化系统 | 自动注入上下文到 system prompt |
+| `/kickme`   | 通知系统   | 关键词匹配时弹 toast 通知      |
+| `/dynamic`  | 动态上下文 | 关键词触发时自动注入上下文     |
 
 所有命令同时支持 palette 操作（`Ctrl+P` → 搜索命令名）。
 
@@ -119,12 +152,13 @@ Agent 生成的 Linux export 语法被自动拦截并转换为 PowerShell 兼容
 三大修复的开关和控制台：
 
 ```
-/shellfix                   → 状态面板（编码、规则、日志、同步）
+/shellfix                   → 状态面板（编码、规则、日志、同步、git-line-ending）
 /shellfix cmd               → 列出命令替换规则
 /shellfix cmd <name> on/off → 开关规则（export/which/source/touch/rm/chmod）
 /shellfix encoding on/off   → 开关编码注入
 /shellfix log on/off        → 开关日志输出
 /shellfix doctor            → 环境诊断
+/shellfix git-line-ending   → Git 换行符警告处理（auto/config/off）
 /shellfix help              → 帮助
 ```
 
@@ -184,31 +218,31 @@ Agent 生成的 Linux export 语法被自动拦截并转换为 PowerShell 兼容
 
 7 个内置注入模块：
 
-| 模块 | 用途 | 默认 |
-|------|------|------|
-| `coding` | 编码规范（TS 严格模式） | ON |
-| `windows` | 平台提醒（Windows + PowerShell） | ON |
-| `tech-stack` | 技术栈声明 | ON |
-| `review` | Review 清单 | OFF |
-| `security` | 安全提醒 | OFF |
-| `git` | Git 规范 | OFF |
+| 模块           | 用途                              | 默认 |
+| -------------- | --------------------------------- | ---- |
+| `coding`       | 编码规范（TS 严格模式）           | ON   |
+| `windows`      | 平台提醒（Windows + PowerShell）  | ON   |
+| `tech-stack`   | 技术栈声明                        | ON   |
+| `review`       | Review 清单                       | OFF  |
+| `security`     | 安全提醒                          | OFF  |
+| `git`          | Git 规范                          | OFF  |
 | `requirements` | 当前任务目标（通过 require 注入） | 动态 |
 
 #### 条件引擎
 
 注入模块支持 9 种条件谓词，按 AND 逻辑评估：
 
-| 谓词 | 示例 | 说明 |
-|------|------|------|
-| `os` | `os=win32` | 平台匹配 |
-| `arch` | `arch=x64` | CPU 架构 |
-| `branch` | `branch=feature/*` | Git 分支通配 |
-| `dirty` | `dirty=true` | 有未提交改动 |
-| `tool_exists` | `tool_exists=dotnet` | 工具是否存在 |
+| 谓词          | 示例                   | 说明         |
+| ------------- | ---------------------- | ------------ |
+| `os`          | `os=win32`             | 平台匹配     |
+| `arch`        | `arch=x64`             | CPU 架构     |
+| `branch`      | `branch=feature/*`     | Git 分支通配 |
+| `dirty`       | `dirty=true`           | 有未提交改动 |
+| `tool_exists` | `tool_exists=dotnet`   | 工具是否存在 |
 | `file_exists` | `file_exists=src/*.cs` | 文件是否存在 |
-| `is_git_repo` | `is_git_repo=true` | 是 Git 仓库 |
-| `always` | — | 始终匹配 |
-| `never` | — | 永不匹配 |
+| `is_git_repo` | `is_git_repo=true`     | 是 Git 仓库  |
+| `always`      | —                      | 始终匹配     |
+| `never`       | —                      | 永不匹配     |
 
 ### `/kickme` — 通知系统
 
@@ -235,6 +269,7 @@ Agent 生成的 Linux export 语法被自动拦截并转换为 PowerShell 兼容
 ```
 
 **工作流程：**
+
 1. 用户发送消息包含触发词 → TUI 侧检测匹配
 2. 规则上下文通过 `chat.message` 钩子直接注入到用户消息中
 3. 冷却机制防止重复触发
@@ -244,16 +279,17 @@ Agent 生成的 Linux export 语法被自动拦截并转换为 PowerShell 兼容
 
 ## 架构
 
-### 钩子体系（v2.0）
+### 钩子体系（v2.1）
 
-| 钩子 | 时机 | 功能 |
-|------|------|------|
-| `shell.env` | 进程初始化 | Git 免交互（16 env vars） |
-| `tool.execute.before` | 每条命令前 | 编码注入 + 6条命令替换 |
-| `command.execute.before` | 斜杠命令 | 服务器端降级处理 |
-| `experimental.chat.system.transform` | LLM 调用前 | 注入模块 + require 内容 |
-| `chat.message` | 用户消息到达 | 动态上下文直接注入 |
-| `experimental.session.compacting` | 会话压缩 | 保护注入上下文不丢失 |
+| 钩子                                 | 时机         | 功能                        |
+| ------------------------------------ | ------------ | --------------------------- |
+| `shell.env`                          | 进程初始化   | Git 免交互 + Git 换行符配置 |
+| `tool.execute.before`                | 每条命令前   | 编码注入 + 6条命令替换      |
+| `tool.execute.after`                 | 命令执行后   | 首次检测换行符警告并通知    |
+| `command.execute.before`             | 斜杠命令     | 服务器端降级处理            |
+| `experimental.chat.system.transform` | LLM 调用前   | 注入模块 + require 内容     |
+| `chat.message`                       | 用户消息到达 | 动态上下文直接注入          |
+| `experimental.session.compacting`    | 会话压缩     | 保护注入上下文不丢失        |
 
 ### 分层架构
 
@@ -300,6 +336,12 @@ cp src/shell-fix-tui.ts ~/.config/opencode/plugins/
 # 3. 重启 OpenCode，自动生效 ✅
 ```
 
+或用部署脚本（自动备份旧版本）：
+
+```powershell
+.\deploy.ps1
+```
+
 > 如需 TUI 调度器（palette 入口、事件订阅），必须同时部署 `shell-fix-tui.ts`；仅需三大修复则可只部署 `shell-fix.ts`。
 
 ---
@@ -308,14 +350,14 @@ cp src/shell-fix-tui.ts ~/.config/opencode/plugins/
 
 ### 三大基础功能
 
-| 测试 | 操作 | 预期 |
-|------|------|------|
-| 中文不乱码 | `Write-Output "你好，世界！"` | 正常显示中文 |
-| export 转换 | `export MY_TEST=hello; echo $env:MY_TEST` | 输出 `hello` |
-| Git 免交互 | `git status` | 正常执行无弹窗 |
-| 版本检测 | `echo $env:SHELLFIX_VERSION` | 输出 `2.0.0` |
-| 状态面板 | 让 Agent 执行 `/shellfix` | 显示状态面板 |
-| 启动日志 | 查看 OpenCode 日志 | 搜索 `[ShellFix] v2.0.0 loaded` |
+| 测试        | 操作                                      | 预期                            |
+| ----------- | ----------------------------------------- | ------------------------------- |
+| 中文不乱码  | `Write-Output "你好，世界！"`             | 正常显示中文                    |
+| export 转换 | `export MY_TEST=hello; echo $env:MY_TEST` | 输出 `hello`                    |
+| Git 免交互  | `git status`                              | 正常执行无弹窗                  |
+| 版本检测    | `echo $env:SHELLFIX_VERSION`              | 输出 `2.1.1`                    |
+| 状态面板    | 让 Agent 执行 `/shellfix`                 | 显示状态面板                    |
+| 启动日志    | 查看 OpenCode 日志                        | 搜索 `[ShellFix] v2.1.1 loaded` |
 
 ### 动态上下文
 
@@ -340,8 +382,9 @@ cp src/shell-fix-tui.ts ~/.config/opencode/plugins/
 OpenCode-Plugins-ShellFix/
 ├── README.md
 ├── CHANGELOG.md
+├── deploy.ps1                  # 一键部署脚本（含备份回滚）
 ├── src/
-│   ├── shell-fix.ts              # 服务器插件（6 个钩子）
+│   ├── shell-fix.ts              # 服务器插件（7 个钩子）
 │   ├── shell-fix-tui.ts          # TUI 插件（调度器 + 事件订阅）
 │   └── lib/
 │       ├── state.ts              # 状态持久化 + 所有 CRUD
@@ -361,11 +404,11 @@ OpenCode-Plugins-ShellFix/
 
 ## 兼容性
 
-| 平台 | 支持 | 说明 |
-|------|------|------|
-| Windows + PowerShell | ✅ | 目标平台，完整支持 |
-| macOS / Linux | ⚠️ | 编码前缀可能报 bash 错误，需关 encoding |
-| OpenCode 版本 | ✅ | 需 ≥ 支持插件系统 |
+| 平台                 | 支持 | 说明                                    |
+| -------------------- | ---- | --------------------------------------- |
+| Windows + PowerShell | ✅    | 目标平台，完整支持                      |
+| macOS / Linux        | ⚠️    | 编码前缀可能报 bash 错误，需关 encoding |
+| OpenCode 版本        | ✅    | 需 ≥ 支持插件系统                       |
 
 ---
 
