@@ -130,6 +130,7 @@ handlers.set("shellfix", (args: string): DispatchResult | null => {
     case "encoding": return handleShellFixEncoding(tokens.slice(1));
     case "log":    return handleShellFixLog(tokens.slice(1));
     case "doctor": return { output: collectDoctorReport() };
+    case "git-line-ending": return handleGitLineEnding(tokens.slice(1));
     case "help":   return { output: buildShellFixHelp() };
     default:       return { output: `未知子命令: ${sub}\n\n${buildShellFixHelp()}` };
   }
@@ -182,6 +183,56 @@ function handleShellFixLog(args: string[]): DispatchResult | null {
   if (action === "on")  { const s2 = loadState(); s2.log = true;  saveState(s2); return { toast: "日志: ON" }; }
   if (action === "off") { const s2 = loadState(); s2.log = false; saveState(s2); return { toast: "日志: OFF" }; }
   return { toast: "用法: /shellfix log on|off" };
+}
+
+// ── /shellfix git-line-ending ────────────────────────────────────────
+
+function handleGitLineEnding(args: string[]): DispatchResult | null {
+  const s = loadState();
+
+  if (args.length === 0) {
+    const modeLabels: Record<string, string> = { auto: "环境变量注入", config: "全局 Git 配置", off: "关闭" };
+    return { output: [
+      `ShellFix — Git 换行符警告处理\n`,
+      `状态: ${s.gitLineEnding === "auto" ? "AUTO" : s.gitLineEnding === "config" ? "CONFIG" : "OFF"}`,
+      `模式: ${modeLabels[s.gitLineEnding]}`,
+      ``,
+      `用法：`,
+      `  /shellfix git-line-ending auto     环境变量注入（默认，仅 OpenCode 生效）`,
+      `  /shellfix git-line-ending config   生成 git config 命令`,
+      `  /shellfix git-line-ending off      关闭`,
+    ].join("\n") };
+  }
+
+  const action = args[0].toLowerCase();
+
+  if (action === "auto") {
+    const s2 = loadState();
+    s2.gitLineEnding = "auto";
+    saveState(s2);
+    return { toast: "Git 换行符处理: AUTO ✅" };
+  }
+
+  if (action === "config") {
+    const s2 = loadState();
+    s2.gitLineEnding = "config";
+    saveState(s2);
+    return { output: [
+      `Git 换行符处理已切换为 CONFIG 模式。`,
+      `请在终端执行以下命令（或发送给 Agent 执行）：\n`,
+      `git config --global core.autocrlf false`,
+      `git config --global core.safecrlf false`,
+    ].join("\n") };
+  }
+
+  if (action === "off") {
+    const s2 = loadState();
+    s2.gitLineEnding = "off";
+    saveState(s2);
+    return { toast: "Git 换行符处理: OFF" };
+  }
+
+  return { toast: "用法: /shellfix git-line-ending auto|config|off" };
 }
 
 // ── /my ────────────────────────────────────────────────────────────
@@ -813,6 +864,9 @@ function buildShellFixPanel(): string {
   lines.push(`║  log       ${fmtToggle(s.log)}  日志输出           ║`);
   lines.push(`║                                      ║`);
   lines.push(`║  Git 免交互: 16 env vars              ║`);
+  const gle = s.gitLineEnding || "auto";
+  const gleLabel = gle === "auto" ? "AUTO" : gle === "config" ? "CFG" : "OFF";
+  lines.push(`║  git-line-ending [${gleLabel.padEnd(3)}]  Git 换行符警告静默   ║`);
   lines.push(`║                                      ║`);
   const syncCfg = getSyncConfig();
   const syncOn = syncCfg.repoUrl ? "ON" : "OFF";
@@ -840,6 +894,7 @@ function buildShellFixHelp(): string {
     `/shellfix encoding on/off   开关编码注入`,
     `/shellfix log on/off        开关日志输出`,
     `/shellfix doctor            环境诊断`,
+    `/shellfix git-line-ending   Git 换行符警告处理`,
     `/shellfix help              本帮助`,
     ``,
     `/my                         模板系统`,

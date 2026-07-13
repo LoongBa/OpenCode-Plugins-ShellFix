@@ -1,5 +1,22 @@
 # Changelog
 
+## v2.1.0 (2026-07-13)
+
+### 第四基础支柱 — Git 环境净化
+
+新增 `/shellfix git-line-ending` 子命令，处理 Git 换行符纯噪声警告：
+
+- **auto 模式（默认）**：通过 `shell.env` 注入 `GIT_CONFIG_COUNT` + `core.autocrlf=false` + `core.safecrlf=false`，仅 OpenCode 进程内生效
+- **config 模式**：输出 `git config --global` 命令，用户可执行以永久生效
+- **off 模式**：关闭，不注入任何配置
+- `tool.execute.after` 钩子：首次检测到换行符警告时打印通知
+- 状态面板显示当前模式（AUTO / CFG / OFF）
+
+### 架构
+
+- `shell.env` 钩子改为动态读取 `PluginState.gitLineEnding`，条件注入
+- `tool.execute.after` 钩子新增（第一次接入该钩子）
+
 ## v2.0.0 (2026-07-13)
 
 ### 架构变更

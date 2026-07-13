@@ -71,6 +71,7 @@ export interface PluginState {
   require: string;
   moduleConditions: Record<string, InjectCondition[]>;
   pendingDynamic: string[];
+  gitLineEnding: "auto" | "config" | "off";
 }
 
 export interface KickmeRule {
@@ -154,6 +155,7 @@ const DEFAULT_STATE: PluginState = {
   dynamic: [],
   autoRules: [],
   pendingDynamic: [],
+  gitLineEnding: "auto",
 };
 
 // ====================================================================
