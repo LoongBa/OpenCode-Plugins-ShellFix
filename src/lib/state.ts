@@ -45,12 +45,10 @@ export interface CmdRules {
   chmod: boolean;
 }
 
-export interface AutoState {
-  modules: Record<string, boolean>;
-  mode: AutoMode;
-  require: string;
-  conditions: Record<string, InjectCondition[]>;
-}
+/** @deprecated AutoState 已在 PluginState 中移除，由 autoRules/require/autoMode/moduleConditions 替代 */
+
+/** 当前插件版本号（单一事实来源） */
+export const PLUGIN_VERSION = "2.0.0";
 
 export interface SyncConfig {
   repoUrl: string;
@@ -65,11 +63,13 @@ export interface PluginState {
   encoding: boolean;
   log: boolean;
   cmdRules: CmdRules;
-  auto: AutoState;
   sync: SyncConfig;
   kickme: KickmeRule[];
   dynamic: DynamicRule[];
   autoRules: AutoRuleV2[];
+  autoMode: AutoMode;
+  require: string;
+  moduleConditions: Record<string, InjectCondition[]>;
   pendingDynamic: string[];
 }
 
@@ -129,7 +129,7 @@ const STATE_DIR = join(homedir(), ".config", "opencode");
 const STATE_PATH = join(STATE_DIR, "shellfix-state.json");
 
 const DEFAULT_STATE: PluginState = {
-  version: "1.6.0",
+  version: "2.0.0",
   encoding: true,
   log: true,
   cmdRules: {
@@ -140,19 +140,9 @@ const DEFAULT_STATE: PluginState = {
     rm: false,
     chmod: false,
   },
-  auto: {
-    modules: {
-      coding: true,
-      windows: true,
-      "tech-stack": true,
-      review: false,
-      security: false,
-      git: false,
-    },
-    mode: "prompt",
-    require: "",
-    conditions: {},
-  },
+  autoMode: "prompt",
+  require: "",
+  moduleConditions: {},
   sync: {
     repoUrl: "",
     branch: "main",
@@ -176,15 +166,53 @@ let _cached: PluginState | null = null;
 // 公开 API
 // ====================================================================
 
+/** 迁移旧版 state 数据：auto → autoRules/require/autoMode/moduleConditions */
+function migrateState(raw: Record<string, unknown>): void {
+  if (raw.auto && typeof raw.auto === "object" && !raw.autoRules) {
+    const old = raw.auto as Record<string, unknown>;
+    // 迁移 modules → autoRules
+    if (old.modules && typeof old.modules === "object") {
+      const rules: AutoRuleV2[] = [];
+      for (const [module, enabled] of Object.entries(old.modules as Record<string, boolean>)) {
+        rules.push({
+          id: `ar_migrate_${Date.now()}_${module}`,
+          trigger: "session_start",
+          module,
+          conditions: [],
+          enabled: !!enabled,
+          priority: 50,
+        });
+      }
+      raw.autoRules = rules;
+    }
+    // 迁移 mode
+    if (old.mode && typeof old.mode === "string") {
+      raw.autoMode = old.mode;
+    }
+    // 迁移 require
+    if (old.require && typeof old.require === "string") {
+      raw.require = old.require;
+    }
+    // 迁移 conditions
+    if (old.conditions && typeof old.conditions === "object") {
+      raw.moduleConditions = old.conditions;
+    }
+    // 删除旧字段
+    delete raw.auto;
+  }
+}
+
 /** 加载状态（先读缓存→再读文件→最后回退默认值） */
 export function loadState(): PluginState {
   if (_cached) return { ..._cached };
   try {
     if (existsSync(STATE_PATH)) {
       const raw = readFileSync(STATE_PATH, "utf-8");
-      const parsed = JSON.parse(raw) as Partial<PluginState>;
+      const parsed = JSON.parse(raw) as Record<string, unknown>;
+      // 自动迁移旧版数据
+      migrateState(parsed);
       // 与默认值合并，避免新增字段缺失
-      _cached = deepMerge(DEFAULT_STATE, parsed);
+      _cached = deepMerge(DEFAULT_STATE, parsed as Partial<PluginState>);
       return { ..._cached };
     }
   } catch {
@@ -199,7 +227,9 @@ export function saveState(state: PluginState): void {
   _cached = { ...state };
   try {
     if (!existsSync(STATE_DIR,)) mkdirSync(STATE_DIR, { recursive: true });
-    writeFileSync(STATE_PATH, JSON.stringify(state, null, 2), "utf-8");
+    const data = { ...state } as Record<string, unknown>;
+    delete (data as any).auto; // 清理旧字段残留
+    writeFileSync(STATE_PATH, JSON.stringify(data, null, 2), "utf-8");
   } catch {
     // 写失败静默忽略（不可写目录）
   }
@@ -240,53 +270,65 @@ export function toggleLog(): boolean {
   return s.log;
 }
 
-/** 设置自动化模块开关 */
+/** 设置自动化模块开关（重定向到 AutoRuleV2） */
 export function setAutoModule(module: string, val: boolean): void {
   const s = loadState();
-  s.auto.modules[module] = val;
+  const existing = s.autoRules.find((r) => r.module === module && r.trigger === "session_start");
+  if (existing) {
+    existing.enabled = val;
+  } else {
+    s.autoRules.push({
+      id: `ar_sync_${Date.now()}`,
+      trigger: "session_start",
+      module,
+      conditions: [],
+      enabled: val,
+      priority: 50,
+    });
+  }
   saveState(s);
 }
 
 /** 设置自动化模式 */
 export function setAutoMode(mode: AutoMode): void {
   const s = loadState();
-  s.auto.mode = mode;
+  s.autoMode = mode;
   saveState(s);
 }
 
 /** 设置临时注入文本 */
 export function setAutoRequire(text: string): void {
   const s = loadState();
-  s.auto.require = text;
+  s.require = text;
   saveState(s);
 }
 
 /** 获取模块的条件列表 */
 export function getModuleConditions(module: string): InjectCondition[] {
   const s = loadState();
-  return s.auto.conditions[module] || [];
+  return s.moduleConditions[module] || [];
 }
 
 /** 设置模块的条件列表 */
 export function setModuleConditions(module: string, conditions: InjectCondition[]): void {
   const s = loadState();
-  s.auto.conditions[module] = conditions;
+  s.moduleConditions[module] = conditions;
   saveState(s);
 }
 
 /** 为模块添加一条条件 */
 export function addModuleCondition(module: string, condition: InjectCondition): void {
   const s = loadState();
-  if (!s.auto.conditions[module]) s.auto.conditions[module] = [];
-  s.auto.conditions[module].push(condition);
+  if (!s.moduleConditions[module]) s.moduleConditions[module] = [];
+  s.moduleConditions[module].push(condition);
   saveState(s);
 }
 
 /** 删除模块的第 N 条条件 */
 export function removeModuleCondition(module: string, index: number): boolean {
   const s = loadState();
-  if (!s.auto.conditions[module] || index < 0 || index >= s.auto.conditions[module].length) return false;
-  s.auto.conditions[module].splice(index, 1);
+  if (!s.moduleConditions[module] || index < 0 || index >= s.moduleConditions[module].length) return false;
+  s.moduleConditions[module].splice(index, 1);
   saveState(s);
   return true;
 }
@@ -294,8 +336,8 @@ export function removeModuleCondition(module: string, index: number): boolean {
 /** 开关模块的第 N 条条件 */
 export function toggleModuleCondition(module: string, index: number): boolean | null {
   const s = loadState();
-  if (!s.auto.conditions[module] || index < 0 || index >= s.auto.conditions[module].length) return null;
-  const cond = s.auto.conditions[module][index];
+  if (!s.moduleConditions[module] || index < 0 || index >= s.moduleConditions[module].length) return null;
+  const cond = s.moduleConditions[module][index];
   cond.enabled = !cond.enabled;
   saveState(s);
   return cond.enabled;
@@ -304,16 +346,16 @@ export function toggleModuleCondition(module: string, index: number): boolean | 
 /** 清空模块的所有条件 */
 export function clearModuleConditions(module: string): void {
   const s = loadState();
-  delete s.auto.conditions[module];
+  delete s.moduleConditions[module];
   saveState(s);
 }
 
-/** 获取启用的自动化模块列表 */
+/** 获取启用的自动化模块列表（基于 AutoRuleV2） */
 export function getEnabledAutoModules(): string[] {
   const s = loadState();
-  return Object.entries(s.auto.modules)
-    .filter(([, v]) => v)
-    .map(([k]) => k);
+  return s.autoRules
+    .filter((r) => r.trigger === "session_start" && r.enabled)
+    .map((r) => r.module);
 }
 
 /** 获取当前启用的命令规则列表 */

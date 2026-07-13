@@ -38,6 +38,7 @@ import {
   toggleKickmeRule,
   setKickmeSound,
   CMD_RULES_META,
+  PLUGIN_VERSION,
   type CmdRuleName,
   type AutoMode,
   type InjectCondition,
@@ -94,7 +95,6 @@ type LocalHandler = (args: string) => DispatchResult | null;
 // ====================================================================
 
 const PLUGIN_NAME = "ShellFix";
-const PLUGIN_VERSION = "1.6.0";
 
 // ====================================================================
 // 进程级缓存（不持久化）
@@ -368,8 +368,8 @@ handlers.set("auto", (args: string): DispatchResult | null => {
       const on = enabled.includes(mod.name) ? "✅" : "  ";
       lines.push(`  ${on} ${mod.label} (${mod.name}) — ${mod.description}`);
     }
-    lines.push(`\n模式: ${s.auto.mode} (${AUTO_MODE_LABEL[s.auto.mode]})`);
-    if (s.auto.require) lines.push(`require: ${s.auto.require}`);
+    lines.push(`\n模式: ${s.autoMode} (${AUTO_MODE_LABEL[s.autoMode]})`);
+    if (s.require) lines.push(`require: ${s.require}`);
     return { output: lines.join("\n") };
   }
 
@@ -377,7 +377,8 @@ handlers.set("auto", (args: string): DispatchResult | null => {
   const mod = getAutoModule(first);
   if (mod) {
     const s = loadState();
-    const current = s.auto.modules[mod.name] ?? mod.defaultOn;
+    const autoRule = s.autoRules.find((r) => r.module === mod.name && r.trigger === "session_start");
+    const current = autoRule ? autoRule.enabled : mod.defaultOn;
     setAutoModule(mod.name, !current);
     return { toast: `${mod.label}: ${!current ? "ON ✅" : "OFF"}` };
   }
@@ -461,13 +462,13 @@ function handleAutoConditions(args: string[]): DispatchResult | null {
   if (args.length === 0) {
     let total = 0;
     for (const mod of AUTO_MODULES) {
-      const conds = s.auto.conditions[mod.name];
+      const conds = s.moduleConditions[mod.name];
       if (conds) total += conds.length;
     }
     if (total === 0) return { output: "未配置条件。使用默认条件。\n/auto conditions <module> 查看。" };
     const lines: string[] = [`条件配置 (共 ${total} 条)：\n`];
     for (const mod of AUTO_MODULES) {
-      const conds = s.auto.conditions[mod.name];
+      const conds = s.moduleConditions[mod.name];
       if (conds && conds.length > 0) {
         for (let i = 0; i < conds.length; i++) {
           const c = conds[i];
@@ -583,15 +584,15 @@ function buildAutoPanel(): DispatchResult | null {
   lines.push(`╔══════════════════════════════════════╗`);
   lines.push(`║ ShellFix 自动化系统                   ║`);
   lines.push(`╠══════════════════════════════════════╣`);
-  lines.push(`║ 模式: ${s.auto.mode} (${AUTO_MODE_LABEL[s.auto.mode]})              ║`);
+  lines.push(`║ 模式: ${s.autoMode} (${AUTO_MODE_LABEL[s.autoMode]})              ║`);
   lines.push(`║                                      ║`);
   for (const mod of AUTO_MODULES) {
     const on = enabled.includes(mod.name) ? "[ON]" : "    ";
     lines.push(`║  ${on} ${mod.label.padEnd(14)} ${mod.name.padEnd(16)}║`);
   }
-  if (s.auto.require) {
+  if (s.require) {
     lines.push(`║                                      ║`);
-    lines.push(`║  require: ${s.auto.require.slice(0, 34).padEnd(34)}║`);
+    lines.push(`║  require: ${s.require.slice(0, 34).padEnd(34)}║`);
   }
   lines.push(`║                                      ║`);
   lines.push(`║  /auto help         查看全部子命令     ║`);
@@ -942,7 +943,9 @@ const tui: TuiPlugin = async (api, _options, _meta) => {
                 api.client?.tui?.executeCommand?.({ command: "|shellfix" });
               }
             });
-          } catch {}
+          } catch (e) {
+            console.error(`[ShellFix] palette error (shellfix.status):`, e);
+          }
         },
       },
 
@@ -1060,7 +1063,9 @@ const tui: TuiPlugin = async (api, _options, _meta) => {
                 onCancel: () => api.ui.dialog?.clear?.(),
               })
             );
-          } catch {}
+          } catch (e) {
+            console.error(`[ShellFix] palette error (shellfix.status):`, e);
+          }
         },
       },
 
@@ -1128,7 +1133,9 @@ const tui: TuiPlugin = async (api, _options, _meta) => {
                 onCancel: () => api.ui.dialog?.clear?.(),
               })
             );
-          } catch {}
+          } catch (e) {
+            console.error(`[ShellFix] palette error (shellfix.status):`, e);
+          }
         },
       },
 
@@ -1152,7 +1159,7 @@ const tui: TuiPlugin = async (api, _options, _meta) => {
             options.push({
               label: "⚙️  模式设置",
               value: "__mode__",
-              description: `当前: ${s.auto.mode}`,
+              description: `当前: ${s.autoMode}`,
             });
             options.push({
               label: "📋 查看全部",
@@ -1194,7 +1201,9 @@ const tui: TuiPlugin = async (api, _options, _meta) => {
                 onCancel: () => api.ui.dialog?.clear?.(),
               })
             );
-          } catch {}
+          } catch (e) {
+            console.error(`[ShellFix] palette error (shellfix.status):`, e);
+          }
         },
       },
 
@@ -1213,7 +1222,9 @@ const tui: TuiPlugin = async (api, _options, _meta) => {
                 api.client?.tui?.executeCommand?.({ command: "|kickme" });
               }
             });
-          } catch {}
+          } catch (e) {
+            console.error(`[ShellFix] palette error (shellfix.status):`, e);
+          }
         },
       },
 
@@ -1232,7 +1243,9 @@ const tui: TuiPlugin = async (api, _options, _meta) => {
                 api.client?.tui?.executeCommand?.({ command: "|dynamic" });
               }
             });
-          } catch {}
+          } catch (e) {
+            console.error(`[ShellFix] palette error (shellfix.status):`, e);
+          }
         },
       },
     ],

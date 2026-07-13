@@ -75,6 +75,7 @@ import {
   toggleKickmeRule,
   setKickmeSound,
   CMD_RULES_META,
+  PLUGIN_VERSION,
   type CmdRuleName,
   type PluginState,
   type AutoMode,
@@ -83,6 +84,8 @@ import {
   type SyncConfig,
   type KickmeRule,
   getDynamicRules,
+  markDynamicTriggered,
+  isDynamicOnCooldown,
   type DynamicRule,
   getAutoRules,
   addAutoRule,
@@ -196,7 +199,6 @@ const ENCODING_PREFIX =
   "[Console]::OutputEncoding=[Text.UTF8Encoding]::new($false);";
 
 const PLUGIN_NAME = "ShellFix";
-const PLUGIN_VERSION = "1.6.0";
 
 const CI_ENV_VARS: Record<string, string> = {
   CI: "true",
@@ -400,8 +402,8 @@ export const ShellFixPlugin: Plugin = async () => {
       }
 
       // require 文本
-      if (s.auto.require) {
-        chunks.push(s.auto.require);
+      if (s.require) {
+        chunks.push(s.require);
       }
 
       // ── 动态上下文注入（消费 pendingDynamic 缓存） ──────────
@@ -426,9 +428,71 @@ export const ShellFixPlugin: Plugin = async () => {
       out.content = out.content + separator + chunks.join("\n\n");
 
       // prompt 模式：追加提示引导
-      if (s.auto.mode === "prompt") {
+      if (s.autoMode === "prompt") {
         out.content +=
           "\n\n[注] 以上为 ShellFix 自动注入的上下文。用 /auto 查看和管理。";
+      }
+    },
+
+    // ================================================================
+    // 钩子 E: chat.message — 动态上下文直接注入用户消息
+    // ================================================================
+    "chat.message": async (_input, output) => {
+      const s = loadState();
+      if (!s.pendingDynamic || s.pendingDynamic.length === 0) return;
+
+      const parts = (output as any).parts as { type: string; text?: string }[] | undefined;
+      if (!parts) return;
+
+      const dynamicRules = getDynamicRules();
+      const injected: string[] = [];
+
+      for (const id of s.pendingDynamic) {
+        const rule = dynamicRules.find((r) => r.id === id);
+        if (!rule || !rule.enabled || !rule.context) continue;
+        if (isDynamicOnCooldown(rule)) continue;
+
+        parts.push({
+          type: "text",
+          text: `\n[动态上下文 - ${rule.trigger}]\n${rule.context}`,
+        });
+        markDynamicTriggered(rule.id);
+        injected.push(id);
+      }
+
+      if (injected.length > 0) {
+        s.pendingDynamic = s.pendingDynamic.filter((id) => !injected.includes(id));
+        saveState(s);
+      }
+    },
+
+    // ================================================================
+    // 钩子 F: experimental.session.compacting — 保护注入上下文不丢失
+    // ================================================================
+    "experimental.session.compacting": async (_input, output) => {
+      const s = loadState();
+      const out = output as { context?: string[]; prompt?: string };
+      const chunks: string[] = [];
+
+      // 保留活跃的注入模块内容
+      const enabledModules = getEnabledAutoModules();
+      for (const mod of AUTO_MODULES) {
+        if (enabledModules.includes(mod.name) && mod.content) {
+          chunks.push(`[模块: ${mod.name}]\n${mod.content}`);
+        }
+      }
+
+      // 保留 require
+      if (s.require) {
+        chunks.push(`[当前任务]\n${s.require}`);
+      }
+
+      if (chunks.length > 0) {
+        out.context = [
+          ...(out.context || []),
+          "--- ShellFix 活跃注入上下文 ---",
+          ...chunks,
+        ];
       }
     },
   };
@@ -655,7 +719,7 @@ function buildShellFixPanel(): string {
   lines.push(`║                                      ║`);
   lines.push(`║  log       ${fmtToggle(s.log)}  日志输出           ║`);
   lines.push(`║                                      ║`);
-  lines.push(`║  注入系统: ${fmtToggle(s.auto.mode !== "silent")} auto上下文        ║`);
+  lines.push(`║  注入系统: ${fmtToggle(s.autoMode !== "silent")} auto上下文        ║`);
   const activeCount = getActiveInjectModules().length;
   const enabledCount = getEnabledAutoModules().length;
   lines.push(`║  已启用: ${activeCount}/${AUTO_MODULES.length} 模块 (条件:${enabledCount}开)  ║`);
@@ -916,9 +980,9 @@ function resolveGitBranchCached(): string {
 /** 判断模块是否应当注入（手动开关 + 条件评估） */
 function shouldInjectModule(modName: string): boolean {
   const s = loadState();
-  if (!s.auto.modules[modName]) return false;
+  if (!s.autoRules.some((r) => r.module === modName && r.trigger === "session_start" && r.enabled)) return false;
 
-  const conditions = s.auto.conditions[modName];
+  const conditions = s.moduleConditions[modName];
   if (!conditions || conditions.length === 0) return true;
 
   return conditions.every((c) => evaluateCondition(c));
@@ -936,7 +1000,7 @@ function countActiveConditions(): number {
   const s = loadState();
   let total = 0, active = 0;
   for (const mod of AUTO_MODULES) {
-    const conds = s.auto.conditions[mod.name];
+    const conds = s.moduleConditions[mod.name];
     if (conds) {
       for (const c of conds) {
         total++;
@@ -1359,15 +1423,15 @@ function handleAutoCommand(args: string): string {
     lines.push(`╔══════════════════════════════════════╗`);
     lines.push(`║ ShellFix 注入系统                    ║`);
     lines.push(`╠══════════════════════════════════════╣`);
-    lines.push(`║ 模式: ${s.auto.mode} (${modeLabel[s.auto.mode]})              ║`);
+    lines.push(`║ 模式: ${s.autoMode} (${modeLabel[s.autoMode]})              ║`);
     lines.push(`║                                      ║`);
     for (const mod of AUTO_MODULES) {
       const on = enabled.includes(mod.name) ? "[ON]" : "    ";
       lines.push(`║  ${on} ${mod.label.padEnd(14)} ${mod.name.padEnd(16)}║`);
     }
-    if (s.auto.require) {
+    if (s.require) {
       lines.push(`║                                      ║`);
-      lines.push(`║  require: ${s.auto.require.slice(0, 34).padEnd(34)}║`);
+      lines.push(`║  require: ${s.require.slice(0, 34).padEnd(34)}║`);
     }
     lines.push(`║                                      ║`);
     lines.push(`║  /auto help         查看全部子命令       ║`);
@@ -1389,11 +1453,11 @@ function handleAutoCommand(args: string): string {
       const actually = active.includes(mod.name) ? "" : " ⚠️条件阻断";
       lines.push(`  ${on} ${mod.label} (${mod.name}) — ${mod.description}${actually}`);
     }
-    lines.push(`\n模式: ${s.auto.mode}`);
-    if (s.auto.require) {
-      lines.push(`require: ${s.auto.require}`);
+    lines.push(`\n模式: ${s.autoMode}`);
+    if (s.require) {
+      lines.push(`require: ${s.require}`);
     }
-    const totalConds = Object.values(s.auto.conditions).reduce((s2, arr) => s2 + arr.length, 0);
+    const totalConds = Object.values(s.moduleConditions).reduce((s2, arr) => s2 + arr.length, 0);
     if (totalConds > 0) {
       const activeConds = countActiveConditions();
       lines.push(`条件: ${totalConds} 条配置, ${activeConds} 条活跃`);
@@ -1405,7 +1469,8 @@ function handleAutoCommand(args: string): string {
   const mod = getAutoModule(first);
   if (mod) {
     const s = loadState();
-    const current = s.auto.modules[mod.name] ?? mod.defaultOn;
+    const autoRule = s.autoRules.find((r) => r.module === mod.name && r.trigger === "session_start");
+    const current = autoRule ? autoRule.enabled : mod.defaultOn;
     const newVal = !current;
     setAutoModule(mod.name, newVal);
     clearConditionCache();
@@ -1513,14 +1578,14 @@ function handleInjectConditions(args: string[]): string {
   // /auto conditions
   if (args.length === 0) {
     const s = loadState();
-    const totalConds = Object.values(s.auto.conditions).reduce((sum, arr) => sum + arr.length, 0);
+    const totalConds = Object.values(s.moduleConditions).reduce((sum, arr) => sum + arr.length, 0);
     if (totalConds === 0) {
       return "未配置条件。使用默认条件（模块定义内置）。\n/auto conditions <module> 查看具体模块。";
     }
     const lines: string[] = [];
     lines.push(`条件配置 (共 ${totalConds} 条)：\n`);
     for (const mod of AUTO_MODULES) {
-      const conds = s.auto.conditions[mod.name];
+      const conds = s.moduleConditions[mod.name];
       if (conds && conds.length > 0) {
         for (let i = 0; i < conds.length; i++) {
           const c = conds[i];
