@@ -12,7 +12,49 @@
  */
 
 // @ts-nocheck
-import type { TuiPlugin, TuiPluginModule } from "@opencode-ai/plugin/tui";
+
+// ====================================================================
+// TUI 插件类型（自包含，避免依赖 @opencode-ai/plugin/tui）
+// ====================================================================
+
+type TuiApi = {
+  keymap: {
+    registerLayer(layer: {
+      commands: TuiCommand[];
+    }): void;
+  };
+  client?: {
+    tui?: {
+      appendPrompt?(opts: { text: string }): Promise<void>;
+      executeCommand?(opts: { command: string }): Promise<void>;
+    };
+  };
+  ui?: {
+    toast?(opts: { message: string }): void;
+    dialog?: {
+      clear?(): void;
+      replace?(fn: () => any): void;
+      DialogSelect?(opts: any): any;
+      DialogPrompt?(opts: any): any;
+    };
+  };
+};
+
+type TuiCommand = {
+  name: string;
+  title: string;
+  category: string;
+  namespace: string;
+  slashName?: string;
+  run(): void;
+};
+
+type TuiPlugin = (api: TuiApi, options?: any, meta?: any) => Promise<void>;
+
+type TuiPluginModule = {
+  id?: string;
+  tui: TuiPlugin;
+};
 
 // ====================================================================
 // 导入 lib 模块（纯 TypeScript，零 OpenCode 依赖）
@@ -21,7 +63,11 @@ import type { TuiPlugin, TuiPluginModule } from "@opencode-ai/plugin/tui";
 import {
   loadState,
   saveState,
+  toggleCmdRule,
   setCmdRule,
+  toggleEncoding,
+  toggleLog,
+  CMD_RULES_META,
   setAutoModule,
   setAutoMode,
   setAutoRequire,
@@ -31,26 +77,12 @@ import {
   removeModuleCondition,
   toggleModuleCondition,
   clearModuleConditions,
-  getSyncConfig,
-  getKickmeRules,
-  addKickmeRule,
-  removeKickmeRule,
-  toggleKickmeRule,
-  setKickmeSound,
-  CMD_RULES_META,
   PLUGIN_VERSION,
+  toggleShowVersion,
+  getKickmeRules,
   type CmdRuleName,
   type AutoMode,
   type InjectCondition,
-  type KickmeRule,
-  getDynamicRules,
-  addDynamicRule,
-  removeDynamicRule,
-  toggleDynamicRule,
-  setDynamicCooldown,
-  markDynamicTriggered,
-  isDynamicOnCooldown,
-  type DynamicRule,
   getAutoRules,
   addAutoRule,
   removeAutoRule,
@@ -63,13 +95,9 @@ import {
   getTemplate,
   saveTemplate,
   renderTemplate,
+  listNotes,
   getNote,
   saveNote,
-  removeNote,
-  listNotesByTime,
-  queryNotesByTime,
-  listTagTree,
-  countTemplatesBySource,
 } from "./lib/template-store";
 
 import {
@@ -78,6 +106,9 @@ import {
   getDefaultEnabledModules,
 } from "./lib/auto-rules";
 
+/** ShellFix palette 分组标题（唯一显示版本号的地方） */
+const SHELLFIX_CATEGORY = `ShellFix v${PLUGIN_VERSION}`;
+
 // ====================================================================
 // 类型定义
 // ====================================================================
@@ -85,6 +116,7 @@ import {
 type DispatchResult = {
   output?: string;  // → appendPrompt（填入输入框）
   toast?: string;   // → showToast（瞬时通知）
+  dialog?: string;  // → 弹窗显示状态面板 / 信息
 };
 
 type LocalHandler = (args: string) => DispatchResult | null;
@@ -100,16 +132,7 @@ const PLUGIN_NAME = "ShellFix";
 // 进程级缓存（不持久化）
 // ====================================================================
 
-/** 上一条消息缓存（用户消息或 LLM 回复） */
-let _lastMessage = "";
-
-function setLastMessage(text: string): void {
-  if (text) _lastMessage = text;
-}
-
-function getLastMessage(): string {
-  return _lastMessage;
-}
+/** 缓存已移除，仅保留 my 和 auto 本地处理器 */
 
 // ====================================================================
 // 本地处理器注册表
@@ -118,122 +141,6 @@ function getLastMessage(): string {
 const handlers = new Map<string, LocalHandler>();
 
 // ── /shellfix ──────────────────────────────────────────────────────
-
-handlers.set("shellfix", (args: string): DispatchResult | null => {
-  if (!args) return { output: buildShellFixPanel() };
-
-  const tokens = args.split(/\s+/);
-  const sub = tokens[0].toLowerCase();
-
-  switch (sub) {
-    case "cmd":    return handleShellFixCmd(tokens.slice(1));
-    case "encoding": return handleShellFixEncoding(tokens.slice(1));
-    case "log":    return handleShellFixLog(tokens.slice(1));
-    case "doctor": return { output: collectDoctorReport() };
-    case "git-line-ending": return handleGitLineEnding(tokens.slice(1));
-    case "help":   return { output: buildShellFixHelp() };
-    default:       return { output: `未知子命令: ${sub}\n\n${buildShellFixHelp()}` };
-  }
-});
-
-function handleShellFixCmd(args: string[]): DispatchResult | null {
-  const s = loadState();
-  if (args.length === 0) {
-    const lines = [`ShellFix — 命令替换规则\n`];
-    for (const meta of CMD_RULES_META) {
-      const state = s.cmdRules[meta.name] ? "ON" : "OFF";
-      lines.push(`  ${state}  ${meta.label}`);
-      lines.push(`       ${meta.description}\n`);
-    }
-    lines.push(`/shellfix cmd <规则名> on/off`);
-    return { output: lines.join("\n") };
-  }
-
-  const ruleName = args[0] as CmdRuleName;
-  const meta = CMD_RULES_META.find((m) => m.name === ruleName);
-  if (!meta) return { toast: `未知规则: ${ruleName}` };
-
-  if (args.length === 1) {
-    return { output: `${meta.label}: ${s.cmdRules[ruleName] ? "ON" : "OFF"}\n${meta.description}` };
-  }
-
-  const action = args[1].toLowerCase();
-  if (action === "on")  { setCmdRule(ruleName, true);  return { toast: `${meta.label}: ON` }; }
-  if (action === "off") { setCmdRule(ruleName, false); return { toast: `${meta.label}: OFF` }; }
-  return { toast: `用法: /shellfix cmd ${ruleName} on|off` };
-}
-
-function handleShellFixEncoding(args: string[]): DispatchResult | null {
-  const s = loadState();
-  if (args.length === 0) {
-    return { output: `ShellFix — 编码注入\n状态: ${s.encoding ? "ON" : "OFF"}\n\n/shellfix encoding on|off` };
-  }
-  const action = args[0].toLowerCase();
-  if (action === "on")  { const s2 = loadState(); s2.encoding = true;  saveState(s2); return { toast: "编码注入: ON" }; }
-  if (action === "off") { const s2 = loadState(); s2.encoding = false; saveState(s2); return { toast: "编码注入: OFF" }; }
-  return { toast: "用法: /shellfix encoding on|off" };
-}
-
-function handleShellFixLog(args: string[]): DispatchResult | null {
-  const s = loadState();
-  if (args.length === 0) {
-    return { output: `ShellFix — 日志\n状态: ${s.log ? "ON" : "OFF"}\n\n/shellfix log on|off` };
-  }
-  const action = args[0].toLowerCase();
-  if (action === "on")  { const s2 = loadState(); s2.log = true;  saveState(s2); return { toast: "日志: ON" }; }
-  if (action === "off") { const s2 = loadState(); s2.log = false; saveState(s2); return { toast: "日志: OFF" }; }
-  return { toast: "用法: /shellfix log on|off" };
-}
-
-// ── /shellfix git-line-ending ────────────────────────────────────────
-
-function handleGitLineEnding(args: string[]): DispatchResult | null {
-  const s = loadState();
-
-  if (args.length === 0) {
-    const modeLabels: Record<string, string> = { auto: "环境变量注入", config: "全局 Git 配置", off: "关闭" };
-    return { output: [
-      `ShellFix — Git 换行符警告处理\n`,
-      `状态: ${s.gitLineEnding === "auto" ? "AUTO" : s.gitLineEnding === "config" ? "CONFIG" : "OFF"}`,
-      `模式: ${modeLabels[s.gitLineEnding]}`,
-      ``,
-      `用法：`,
-      `  /shellfix git-line-ending auto     环境变量注入（默认，仅 OpenCode 生效）`,
-      `  /shellfix git-line-ending config   生成 git config 命令`,
-      `  /shellfix git-line-ending off      关闭`,
-    ].join("\n") };
-  }
-
-  const action = args[0].toLowerCase();
-
-  if (action === "auto") {
-    const s2 = loadState();
-    s2.gitLineEnding = "auto";
-    saveState(s2);
-    return { toast: "Git 换行符处理: AUTO ✅" };
-  }
-
-  if (action === "config") {
-    const s2 = loadState();
-    s2.gitLineEnding = "config";
-    saveState(s2);
-    return { output: [
-      `Git 换行符处理已切换为 CONFIG 模式。`,
-      `请在终端执行以下命令（或发送给 Agent 执行）：\n`,
-      `git config --global core.autocrlf false`,
-      `git config --global core.safecrlf false`,
-    ].join("\n") };
-  }
-
-  if (action === "off") {
-    const s2 = loadState();
-    s2.gitLineEnding = "off";
-    saveState(s2);
-    return { toast: "Git 换行符处理: OFF" };
-  }
-
-  return { toast: "用法: /shellfix git-line-ending auto|config|off" };
-}
 
 // ── /my ────────────────────────────────────────────────────────────
 
@@ -247,7 +154,7 @@ handlers.set("my", (args: string): DispatchResult | null => {
   if (first === "?") {
     const rest = tokens.slice(1).join(" ");
     if (!rest) {
-      const all = listTemplates();
+      const all = listTemplates() || [];
       if (all.length === 0) return { toast: "暂无模板" };
       return { output: "可用模板：\n" + all.map((t) => `  ${t.name}${t.builtin ? "" : " *"}  ${t.description || ""}`).join("\n") + "\n\n* 用户自定义" };
     }
@@ -275,7 +182,7 @@ handlers.set("my", (args: string): DispatchResult | null => {
   const name = first;
   const tmpl = getTemplate(name);
   if (!tmpl) {
-    const all = listTemplates();
+    const all = listTemplates() || [];
     const match = all.find((t) => t.name.startsWith(name));
     if (match) {
       const tmplArgs = tokens.slice(1);
@@ -290,114 +197,6 @@ handlers.set("my", (args: string): DispatchResult | null => {
   const rendered = renderTemplate(tmpl.template, tmplArgs);
   if (rendered) return { output: rendered };
   return { toast: "模板渲染失败" };
-});
-
-// ── /note ──────────────────────────────────────────────────────────
-
-const NOTE_SAVE_RE = /^#([^#]+)#:(.*)$/s;
-const NOTE_TAG_RE = /^#([^#]+)#$/;
-
-handlers.set("note", (args: string): DispatchResult | null => {
-  if (!args) return { output: "笔记系统\n用法: /note ? 浏览 /note #tag# 注入 /note timeline 查看时间线" };
-
-  const tokens = args.split(/\s+/);
-  const first = tokens[0];
-
-  // 查询模式
-  if (first === "?") {
-    const rest = tokens.slice(1).join(" ");
-    if (!rest) {
-      const tree = listTagTree();
-      if (tree.length === 0) return { toast: "暂无笔记" };
-      return { output: "笔记标签：\n" + tree.map((t) => `  #${t.endsWith("/") ? t.slice(0, -1) : t}#`).join("\n") };
-    }
-    const prefix = rest.endsWith("/") ? rest : rest;
-    const children = listTagTree(prefix);
-    if (children.length === 0) {
-      const note = getNote(rest);
-      if (note) return { output: `笔记 #${rest}#:\n${note.content}` };
-      return { toast: `标签 "${rest}" 下无内容` };
-    }
-    return { output: `${rest}/ 下的子标签：\n` + children.map((c) => `  #${prefix}${c.endsWith("/") ? c.slice(0, -1) : c}#`).join("\n") };
-  }
-
-  // timeline 时间线
-  if (first === "timeline") {
-    let tagFilter = "";
-    let limit = 20;
-    let since: string | undefined;
-    let i = 1;
-    while (i < tokens.length) {
-      const t = tokens[i];
-      if (t === "--limit") {
-        limit = parseInt(tokens[++i], 10) || 20;
-      } else if (t === "--since") {
-        const raw = tokens[++i];
-        if (raw) {
-          // 支持 YYYY-MM-DD 和 YYYY-MM-DDTHH:mm:ss.SSSZ
-          since = raw.length === 10 ? raw + "T00:00:00.000Z" : raw;
-        }
-      } else if (t.startsWith("#") && t.endsWith("#")) {
-        tagFilter = t.slice(1, -1);
-      }
-      i++;
-    }
-    const notes = tagFilter
-      ? queryNotesByTime(tagFilter, limit, since)
-      : listNotesByTime(limit, since);
-    if (notes.length === 0) return { toast: "暂无笔记" };
-    const lines: string[] = [`📅 笔记时间线（显示 ${notes.length} 条）`, "━".repeat(40)];
-    for (const n of notes) {
-      const date = n.created.slice(0, 19).replace("T", " ");
-      lines.push(`#${date}# #${n.tag}#`);
-      lines.push(n.content.slice(0, 100));
-      lines.push("");
-    }
-    return { output: lines.join("\n") };
-  }
-
-  // rm
-  if (first === "rm") {
-    const tagMatch = args.match(NOTE_TAG_RE);
-    if (!tagMatch) return { toast: '用法: /note rm #tag#' };
-    const tag = tagMatch[1];
-    if (removeNote(tag)) return { toast: `笔记 #${tag}# 已删除` };
-    return { toast: `笔记 #${tag}# 不存在` };
-  }
-
-  // 保存: /note #tag#:content
-  const saveMatch = args.match(NOTE_SAVE_RE);
-  if (saveMatch) {
-    const tag = saveMatch[1].trim();
-    const content = saveMatch[2].trim();
-    if (content === ":last") {
-      const last = getLastMessage();
-      if (last) {
-        saveNote(tag, last);
-        return { toast: `笔记 #${tag}# 已保存（来自缓存）` };
-      }
-      return { toast: '缓存为空。先发送消息或等待 LLM 回复后再试。' };
-    }
-    saveNote(tag, content);
-    return { toast: `笔记 #${tag}# 已保存` };
-  }
-
-  // 注入: /note #tag#
-  const tagMatch2 = args.match(NOTE_TAG_RE);
-  if (tagMatch2) {
-    const tag = tagMatch2[1];
-    const note = getNote(tag);
-    if (!note) {
-      const children = listTagTree(tag);
-      if (children.length > 0) {
-        return { output: `${tag}/ 下的子标签：\n` + children.map((c) => `  #${tag}/${c.endsWith("/") ? c.slice(0, -1) : c}#`).join("\n") };
-      }
-      return { toast: `笔记 #${tag}# 不存在` };
-    }
-    return { output: note.content };
-  }
-
-  return { toast: '无法解析。格式: /note #tag#:content 或 /note #tag#' };
 });
 
 // ── /auto ──────────────────────────────────────────────────────────
@@ -438,7 +237,7 @@ handlers.set("auto", (args: string): DispatchResult | null => {
   if (first === "mode") {
     const mode = tokens[1] as AutoMode | undefined;
     if (!mode || !["prompt", "auto", "silent"].includes(mode)) {
-      return { output: `用法: /auto mode prompt|auto|silent\n当前: ${loadState().auto.mode}` };
+      return { output: `用法: /auto mode prompt|auto|silent\n当前: ${loadState().autoMode}` };
     }
     setAutoMode(mode);
     return { toast: `模式: ${mode}` };
@@ -448,7 +247,7 @@ handlers.set("auto", (args: string): DispatchResult | null => {
   if (first === "require" || first === "req") {
     const text = tokens.slice(1).join(" ");
     if (!text) {
-      const current = loadState().auto.require;
+      const current = loadState().require;
       return { output: current ? `当前 require:\n${current}` : "require 未设置。用 /auto require <文本> 设置。" };
     }
     setAutoRequire(text);
@@ -653,307 +452,24 @@ function buildAutoPanel(): DispatchResult | null {
 
 // ====================================================================
 
-// ── /kickme ────────────────────────────────────────────────────────
-
-handlers.set("kickme", (args: string): DispatchResult | null => {
-  if (!args) return listKickmeRules();
-
-  const tokens = args.split(/\s+/);
-  const first = tokens[0];
-
-  // /kickme add <keyword> <title> <message>
-  if (first === "add") {
-    const keyword = tokens[1];
-    const title = tokens[2] || keyword;
-    const message = tokens.slice(3).join(" ") || `触发关键词: ${keyword}`;
-    if (!keyword) return { toast: "用法: /kickme add <关键词> <标题> <消息>" };
-    const id = addKickmeRule({
-      label: keyword,
-      enabled: true,
-      matchType: "keyword",
-      pattern: keyword,
-      title,
-      message,
-      sound: false,
-      scope: "both",
-    });
-    return { toast: `规则已添加: "${keyword}" (${id})` };
-  }
-
-  // /kickme rm <id>
-  if (first === "rm") {
-    const id = tokens[1];
-    if (!id) return { toast: "用法: /kickme rm <id>" };
-    if (removeKickmeRule(id)) return { toast: `规则已删除: ${id}` };
-    return { toast: `规则不存在: ${id}` };
-  }
-
-  // /kickme on <id>
-  if (first === "on") {
-    const id = tokens[1];
-    if (!id) return { toast: "用法: /kickme on <id>" };
-    const rule = getKickmeRules().find((r) => r.id === id);
-    if (!rule) return { toast: `规则不存在: ${id}` };
-    if (!rule.enabled) toggleKickmeRule(id);
-    return { toast: `规则已开启: ${rule.label}` };
-  }
-
-  // /kickme off <id>
-  if (first === "off") {
-    const id = tokens[1];
-    if (!id) return { toast: "用法: /kickme off <id>" };
-    const rule = getKickmeRules().find((r) => r.id === id);
-    if (!rule) return { toast: `规则不存在: ${id}` };
-    if (rule.enabled) toggleKickmeRule(id);
-    return { toast: `规则已关闭: ${rule.label}` };
-  }
-
-  // /kickme sound <id> on/off
-  if (first === "sound") {
-    const id = tokens[1];
-    const onOff = tokens[2];
-    if (!id || !onOff) return { toast: "用法: /kickme sound <id> on|off" };
-    const ok = setKickmeSound(id, onOff === "on");
-    if (!ok) return { toast: `规则不存在: ${id}` };
-    return { toast: `提示音: ${onOff === "on" ? "ON" : "OFF"}` };
-  }
-
-  return { output: listKickmeRulesOutput() };
-});
-
-function listKickmeRules(): DispatchResult | null {
-  return { output: listKickmeRulesOutput() };
-}
-
-function listKickmeRulesOutput(): string {
-  const rules = getKickmeRules();
-  if (rules.length === 0) {
-    return "暂无 kickme 规则。\n用法: /kickme add <关键词> <标题> <消息>";
-  }
-  const lines: string[] = [];
-  lines.push(`╔══════════════════════════════════════╗`);
-  lines.push(`║ Kickme 通知规则                       ║`);
-  lines.push(`╠══════════════════════════════════════╣`);
-  for (const rule of rules) {
-    const icon = rule.enabled ? "✅" : "⏸️";
-    const sound = rule.sound ? "🔊" : "  ";
-    const scope = rule.scope === "user" ? "用户" : rule.scope === "llm" ? "LLM" : "全部";
-    lines.push(`║  ${icon}${sound} [${scope}] ${rule.label.padEnd(16)}${rule.id.padEnd(12)}║`);
-    lines.push(`║      → ${rule.title.padEnd(36)}║`);
-  }
-  lines.push(`║                                      ║`);
-  lines.push(`║  /kickme add <关键词> <标题> <消息>   ║`);
-  lines.push(`║  /kickme rm|on|off <id>              ║`);
-  lines.push(`║  /kickme sound <id> on|off           ║`);
-  lines.push(`╚══════════════════════════════════════╝`);
-  return lines.join("\n");
-}
-
-// ── /dynamic ──────────────────────────────────────────────────────
-
-handlers.set("dynamic", (args: string): DispatchResult | null => {
-  if (!args) return listDynamicRules();
-
-  const tokens = args.split(/\s+/);
-  const first = tokens[0];
-
-  // /dynamic add <trigger> <context>
-  if (first === "add") {
-    const trigger = tokens[1];
-    const context = tokens.slice(2).join(" ");
-    if (!trigger) return { toast: "用法: /dynamic add <触发词> <注入内容>" };
-    const id = addDynamicRule({
-      trigger,
-      enabled: true,
-      matchType: "keyword",
-      context: context || `(当前对话涉及 ${trigger})`,
-      cooldown: 0,
-      lastTriggered: 0,
-    });
-    return { toast: `动态规则已添加: "${trigger}" (${id})` };
-  }
-
-  // /dynamic rm <id>
-  if (first === "rm") {
-    const id = tokens[1];
-    if (!id) return { toast: "用法: /dynamic rm <id>" };
-    if (removeDynamicRule(id)) return { toast: `规则已删除: ${id}` };
-    return { toast: `规则不存在: ${id}` };
-  }
-
-  // /dynamic on <id>
-  if (first === "on") {
-    const id = tokens[1];
-    if (!id) return { toast: "用法: /dynamic on <id>" };
-    const rules = getDynamicRules();
-    const rule = rules.find((r) => r.id === id);
-    if (!rule) return { toast: `规则不存在: ${id}` };
-    if (!rule.enabled) toggleDynamicRule(id);
-    return { toast: `规则已开启: ${rule.trigger}` };
-  }
-
-  // /dynamic off <id>
-  if (first === "off") {
-    const id = tokens[1];
-    if (!id) return { toast: "用法: /dynamic off <id>" };
-    const rules = getDynamicRules();
-    const rule = rules.find((r) => r.id === id);
-    if (!rule) return { toast: `规则不存在: ${id}` };
-    if (rule.enabled) toggleDynamicRule(id);
-    return { toast: `规则已关闭: ${rule.trigger}` };
-  }
-
-  // /dynamic cooldown <id> <seconds>
-  if (first === "cooldown") {
-    const id = tokens[1];
-    const seconds = parseInt(tokens[2], 10);
-    if (!id || Number.isNaN(seconds)) return { toast: "用法: /dynamic cooldown <id> <秒数>" };
-    if (setDynamicCooldown(id, seconds)) return { toast: `冷却时间已设置: ${seconds}s` };
-    return { toast: `规则不存在: ${id}` };
-  }
-
-  return { output: listDynamicRulesOutput() };
-});
-
-function listDynamicRules(): DispatchResult | null {
-  return { output: listDynamicRulesOutput() };
-}
-
-function listDynamicRulesOutput(): string {
-  const rules = getDynamicRules();
-  if (rules.length === 0) {
-    return "暂无动态规则。\n用法: /dynamic add <触发词> <注入内容>";
-  }
-  const lines: string[] = [];
-  lines.push(`╔══════════════════════════════════════╗`);
-  lines.push(`║ Dynamic 动态上下文注入规则             ║`);
-  lines.push(`╠══════════════════════════════════════╣`);
-  for (const rule of rules) {
-    const icon = rule.enabled ? "✅" : "⏸️";
-    const cd = rule.cooldown > 0 ? `[CD:${rule.cooldown}s]` : "    ";
-    const matchT = rule.matchType === "regex" ? "R" : "K";
-    lines.push(`║  ${icon}${cd} [${matchT}] ${rule.trigger.padEnd(16)}${rule.id.padEnd(12)}║`);
-    lines.push(`║      → ${(rule.context || "").slice(0, 36).padEnd(36)}║`);
-  }
-  lines.push(`║                                      ║`);
-  lines.push(`║  /dynamic add <触发词> <注入内容>     ║`);
-  lines.push(`║  /dynamic rm|on|off <id>             ║`);
-  lines.push(`║  /dynamic cooldown <id> <秒数>       ║`);
-  lines.push(`╚══════════════════════════════════════╝`);
-  return lines.join("\n");
-}
-
-// ====================================================================
-// /shellfix — 面板 + 帮助 + doctor
-// ====================================================================
-
-function buildShellFixPanel(): string {
-  const s = loadState();
-  const lines: string[] = [];
-  lines.push(`╔══════════════════════════════════════╗`);
-  lines.push(`║ ${PLUGIN_NAME} v${PLUGIN_VERSION}              ║`);
-  lines.push(`╠══════════════════════════════════════╣`);
-  lines.push(`║                                      ║`);
-  lines.push(`║  encoding  ${fmtToggle(s.encoding)}  中文不乱码         ║`);
-  lines.push(`║                                      ║`);
-  for (const meta of CMD_RULES_META) {
-    const on = s.cmdRules[meta.name];
-    lines.push(`║  ${meta.label.padEnd(22)} ${fmtToggle(on)}  ║`);
-  }
-  lines.push(`║                                      ║`);
-  lines.push(`║  log       ${fmtToggle(s.log)}  日志输出           ║`);
-  lines.push(`║                                      ║`);
-  lines.push(`║  Git 免交互: 16 env vars              ║`);
-  const gle = s.gitLineEnding || "auto";
-  const gleLabel = gle === "auto" ? "AUTO" : gle === "config" ? "CFG" : "OFF";
-  lines.push(`║  git-line-ending [${gleLabel.padEnd(3)}]  Git 换行符警告静默   ║`);
-  lines.push(`║                                      ║`);
-  const syncCfg = getSyncConfig();
-  const syncOn = syncCfg.repoUrl ? "ON" : "OFF";
-  lines.push(`║  sync     [${syncOn}]  远程模板仓库        ║`);
-  if (syncCfg.repoUrl) {
-    const counts = countTemplatesBySource();
-    lines.push(`║  内置:${String(counts.builtin).padStart(2)} 用户:${String(counts.user).padStart(2)} 远程:${String(counts.remote).padStart(2)}         ║`);
-  }
-  lines.push(`║                                      ║`);
-  lines.push(`║  /shellfix help  查看全部子命令       ║`);
-  lines.push(`╚══════════════════════════════════════╝`);
-  return lines.join("\n");
-}
-
-function fmtToggle(on: boolean): string {
-  return on ? "[ON] " : "[OFF]";
-}
-
-function buildShellFixHelp(): string {
-  return [
-    `ShellFix 命令帮助\n`,
-    `/shellfix                   状态面板`,
-    `/shellfix cmd               列出所有命令替换规则`,
-    `/shellfix cmd <name> on/off 开关规则`,
-    `/shellfix encoding on/off   开关编码注入`,
-    `/shellfix log on/off        开关日志输出`,
-    `/shellfix doctor            环境诊断`,
-    `/shellfix git-line-ending   Git 换行符警告处理`,
-    `/shellfix help              本帮助`,
-    ``,
-    `/my                         模板系统`,
-    `/my ?                       列出所有模板`,
-    `/my ? <name>                预览模板内容`,
-    `/my <name> [args...]        执行模板`,
-    `/my save <name> <content>   保存模板`,
-    `/my rm <name>               删除模板`,
-    `/my show <name>             查看模板原始内容`,
-    `/my sync                    同步远程模板仓库`,
-    `/my sync-config             查看同步配置`,
-    ``,
-    `/note                       笔记系统`,
-    `/note ?                     列出所有笔记标签`,
-    `/note ? <prefix>            浏览标签树`,
-    `/note #tag#                 注入笔记内容`,
-    `/note #tag#:<content>       保存笔记`,
-    `/note rm #tag#              删除笔记`,
-    ``,
-    `/auto                       自动化系统`,
-    `/auto list                  列出模块启停状态`,
-    `/auto <module>              切换模块开关`,
-    `/auto mode prompt|auto|silent 设置模式`,
-    `/auto require <文本>        注入当前任务目标`,
-    `/auto req_rm                清除 require`,
-    `/auto show <module>         查看模块内容`,
-    `/auto reset                 恢复默认`,
-    `/auto conditions            条件管理`,
-    ``,
-    `/dynamic                    动态上下文注入规则`,
-    `/dynamic add <触发词> <内容> 添加规则`,
-    `/dynamic rm|on|off <id>     删除/开关规则`,
-    `/dynamic cooldown <id> <秒>  设置冷却时间`,
-  ].join("\n");
-}
-
-function collectDoctorReport(): string {
-  const lines: string[] = [];
-  lines.push(`╔══════════════════════════════════════╗`);
-  lines.push(`║ ShellFix v${PLUGIN_VERSION} — 环境诊断      ║`);
-  lines.push(`╠══════════════════════════════════════╣`);
-  try {
-    const os = require("os");
-    lines.push(`║ OS: ${os.platform()} ${os.release()}`);
-    lines.push(`║ Hostname: ${os.hostname()}`);
-    lines.push(`║ Arch: ${os.arch()}`);
-  } catch { /* */ }
-  lines.push(`║ Plugins: ${PLUGIN_NAME} v${PLUGIN_VERSION}`);
-  lines.push(`╚══════════════════════════════════════╝`);
-  return lines.join("\n");
-}
+// dynamic/kickme/shellfix handlers removed — only my and auto remain
 
 // ====================================================================
 // 调度器
 // ====================================================================
 
+/** 移除面板的 Unicode 框线字符（对话框比例字体下对齐错乱） */
+function stripBoxChars(text: string): string {
+  return text
+    .split("\n")
+    .map((l) => l.replace(/^[╔╗║╚╝╠╣╩╦═╧\s]+/, "").replace(/[╔╗║╚╝╠╣╩╦═╧\s]+$/, ""))
+    .filter(Boolean)
+    .join("\n");
+}
+
 /**
- * 尝试本地处理命令。如果本地处理器返回 null，回退到服务器。
- * 本地处理结果通过 appendPrompt（填入输入框）或 toast（通知）输出。
+ * 尝试本地处理命令（仅 palette 路径调用）。
+ * 输出结果通过 dialog 或 toast 展示，不再 appendPrompt 填入输入框。
  */
 async function dispatch(api: any, cmd: string, args: string): Promise<boolean> {
   const handler = handlers.get(cmd);
@@ -961,8 +477,13 @@ async function dispatch(api: any, cmd: string, args: string): Promise<boolean> {
     try {
       const result = handler(args);
       if (result) {
-        if (result.output && api.client?.tui?.appendPrompt) {
-          await api.client.tui.appendPrompt({ text: result.output });
+        if (result.output && api.ui?.dialog?.replace) {
+          api.ui.dialog.replace(() =>
+            api.ui.DialogAlert({
+              title: `${PLUGIN_NAME} v${PLUGIN_VERSION} — ${cmd}`,
+              message: stripBoxChars(result.output),
+            })
+          );
         }
         if (result.toast) {
           api.ui?.toast?.({ message: result.toast });
@@ -981,328 +502,147 @@ async function dispatch(api: any, cmd: string, args: string): Promise<boolean> {
 // ====================================================================
 
 const tui: TuiPlugin = async (api, _options, _meta) => {
-  api.keymap.registerLayer({
+  try {
+    if (!api?.keymap?.registerLayer) {
+      console.error(`[ShellFix] TUI keymap API missing — plugin disabled`);
+      return;
+    }
+    api.keymap.registerLayer({
     commands: [
-      // ── /shellfix ────────────────────────────────────────────────
+      // ── ShellFix 各子命令（独立 palette 入口） ────────────────
       {
-        name: "shellfix.status",
-        title: "ShellFix 状态面板",
-        category: "ShellFix",
+        name: "shellfix",
+        title: `ShellFix status 状态总览`,
+        category: SHELLFIX_CATEGORY,
         namespace: "palette",
-        slashName: "shellfix",
         run() {
-          try {
-            api.ui.dialog?.clear?.();
-            dispatch(api, "shellfix", "").then((handled) => {
-              if (!handled) {
-                api.client?.tui?.executeCommand?.({ command: "|shellfix" });
-              }
-            });
-          } catch (e) {
-            console.error(`[ShellFix] palette error (shellfix.status):`, e);
-          }
+          try { showShellFixStatus(api); } catch (e) { console.error(`[ShellFix] palette error (shellfix.status):`, e); }
+        },
+      },
+      {
+        name: "shellfix.encoding",
+        title: `ShellFix encoding 中文不乱码`,
+        category: SHELLFIX_CATEGORY,
+        namespace: "palette",
+        run() {
+          try { showToggleInfo(api, "encoding", toggleEncoding); } catch (e) { console.error(`[ShellFix] palette error (shellfix.encoding):`, e); }
+        },
+      },
+      {
+        name: "shellfix.bash",
+        title: `ShellFix bash 适配 Powershell 避免出错`,
+        category: SHELLFIX_CATEGORY,
+        namespace: "palette",
+        run() {
+          try { showCmdRules(api); } catch (e) { console.error(`[ShellFix] palette error (shellfix.bash):`, e); }
+        },
+      },
+      {
+        name: "shellfix.log",
+        title: `ShellFix log 记录操作信息`,
+        category: SHELLFIX_CATEGORY,
+        namespace: "palette",
+        run() {
+          try { showToggleInfo(api, "log", toggleLog); } catch (e) { console.error(`[ShellFix] palette error (shellfix.log):`, e); }
+        },
+      },
+      {
+        name: "shellfix.git-env",
+        title: `ShellFix git-env 避免等待交互`,
+        category: SHELLFIX_CATEGORY,
+        namespace: "palette",
+        run() {
+          try { showGitEnv(api); } catch (e) { console.error(`[ShellFix] palette error (shellfix.git-env):`, e); }
+        },
+      },
+      {
+        name: "shellfix.git-eol",
+        title: `ShellFix git-eol 避免换行警告`,
+        category: SHELLFIX_CATEGORY,
+        namespace: "palette",
+        run() {
+          try { showGitLineEnding(api); } catch (e) { console.error(`[ShellFix] palette error (shellfix.git-eol):`, e); }
+        },
+      },
+      {
+        name: "shellfix.kickme",
+        title: `ShellFix kickme 关键词通知`,
+        category: SHELLFIX_CATEGORY,
+        namespace: "palette",
+        run() {
+          try { showKickme(api); } catch (e) { console.error(`[ShellFix] palette error (shellfix.kickme):`, e); }
+        },
+      },
+      {
+        name: "shellfix.banner",
+        title: `ShellFix banner 启动版本信息`,
+        category: SHELLFIX_CATEGORY,
+        namespace: "palette",
+        run() {
+          try { showToggleInfo(api, "banner", toggleShowVersion); } catch (e) { console.error(`[ShellFix] palette error (shellfix.banner):`, e); }
+        },
+      },
+      {
+        name: "shellfix.sysinfo",
+        title: `ShellFix sysinfo 查看系统信息`,
+        category: SHELLFIX_CATEGORY,
+        namespace: "palette",
+        run() {
+          try { showDoctor(api); } catch (e) { console.error(`[ShellFix] palette error (shellfix.sysinfo):`, e); }
+        },
+      },
+      {
+        name: "shellfix.about",
+        title: `ShellFix about 版本与更新`,
+        category: SHELLFIX_CATEGORY,
+        namespace: "palette",
+        run() {
+          try { showAbout(api); } catch (e) { console.error(`[ShellFix] palette error (shellfix.about):`, e); }
+        },
+      },
+      {
+        name: "shellfix.help",
+        title: `ShellFix help 命令参考`,
+        category: SHELLFIX_CATEGORY,
+        namespace: "palette",
+        run() {
+          try { showShellFixHelp(api); } catch (e) { console.error(`[ShellFix] palette error (shellfix.help):`, e); }
         },
       },
 
       // ── /my ──────────────────────────────────────────────────────
       {
         name: "shellfix.my",
-        title: "ShellFix 模板系统",
-        category: "ShellFix",
+        title: "ShellFix my 预设文本模板",
+        category: SHELLFIX_CATEGORY,
         namespace: "palette",
         slashName: "my",
         run() {
-          try {
-            api.ui.dialog?.clear?.();
-            const all = listTemplates();
-            if (all.length === 0) {
-              api.ui.toast({ message: "暂无模板" });
-              return;
-            }
-            api.ui.dialog?.replace?.(() =>
-              api.ui.DialogSelect({
-                title: "模板系统",
-                options: [
-                  { label: "✏️ 编辑模板", value: "__edit__", description: "修改已保存的模板内容" },
-                  { label: "📋 查看全部", value: "__list__", description: "查看所有模板" },
-                  ...all.map((t) => ({
-                    label: t.name,
-                    value: t.name,
-                    description: t.description || "",
-                  })),
-                ],
-                onSelect: (name: string) => {
-                  if (name === "__edit__") {
-                    // 进入编辑模式：选择要编辑的模板
-                    const editable = all.filter((t) => !t.builtin);
-                    if (editable.length === 0) {
-                      api.ui.toast({ message: "没有可编辑的用户模板" });
-                      return;
-                    }
-                    api.ui.dialog?.replace?.(() =>
-                      api.ui.DialogSelect({
-                        title: "选择要编辑的模板",
-                        options: editable.map((t) => ({
-                          label: t.name,
-                          value: t.name,
-                          description: t.description || "",
-                        })),
-                        onSelect: (editName: string) => {
-                          const tmpl = getTemplate(editName);
-                          if (!tmpl) { api.ui.toast({ message: "不存在" }); return; }
-                          api.ui.dialog?.replace?.(() =>
-                            api.ui.DialogPrompt({
-                              title: `编辑模板 "${editName}"`,
-                              label: "新内容:",
-                              defaultText: tmpl.template,
-                              onConfirm: (content: string) => {
-                                if (content.trim()) {
-                                  saveTemplate({ name: editName, template: content, description: tmpl.description });
-                                  api.ui.toast({ message: `模板 "${editName}" 已更新` });
-                                  api.ui.dialog?.clear?.();
-                                } else {
-                                  api.ui.toast({ message: "内容不能为空" });
-                                }
-                              },
-                              onCancel: () => api.ui.dialog?.clear?.(),
-                            })
-                          );
-                        },
-                        onCancel: () => api.ui.dialog?.clear?.(),
-                      })
-                    );
-                  } else if (name === "__list__") {
-                    dispatch(api, "my", "?").then((handled) => {
-                      if (!handled) api.client?.tui?.executeCommand?.({ command: "|my ?" });
-                    });
-                  } else {
-                  const tmpl = getTemplate(name);
-                  if (!tmpl || !tmpl.template) {
-                    api.ui.toast({ message: `模板 "${name}" 无内容` });
-                    return;
-                  }
-                  const paramCount = (tmpl.template.match(/\{(\d+)\}/g) || [])
-                    .map((m) => parseInt(m.slice(1, -1), 10))
-                    .filter((n) => !Number.isNaN(n))
-                    .reduce((max, n) => Math.max(max, n), -1) + 1;
-                  if (paramCount > 0) {
-                    api.ui.dialog?.replace?.(() =>
-                      api.ui.DialogPrompt({
-                        title: `模板 "${name}" — 输入参数 (${paramCount} 个)`,
-                        label: `参数 (空格分隔):`,
-                        placeholder: "arg1 arg2 ...",
-                        onConfirm: (input: string) => {
-                          const args = input.trim().split(/\s+/);
-                          const rendered = renderTemplate(tmpl.template, args);
-                          if (rendered) {
-                            api.client?.tui?.appendPrompt?.({ text: rendered });
-                            api.ui.dialog?.clear?.();
-                          } else {
-                            api.ui.toast({ message: "渲染失败" });
-                          }
-                        },
-                        onCancel: () => api.ui.dialog?.clear?.(),
-                      })
-                    );
-} else {
-                      const rendered = renderTemplate(tmpl.template, []);
-                      if (rendered) {
-                        api.client?.tui?.appendPrompt?.({ text: rendered });
-                        api.ui.dialog?.clear?.();
-                      } else {
-                        api.ui.toast({ message: "渲染失败" });
-                      }
-                    }
-                  }
-                },
-                onCancel: () => api.ui.dialog?.clear?.(),
-              })
-            );
-          } catch (e) {
-            console.error(`[ShellFix] palette error (shellfix.status):`, e);
-          }
-        },
-      },
-
-      // ── /note ────────────────────────────────────────────────────
-      {
-        name: "shellfix.note",
-        title: "ShellFix 笔记系统",
-        category: "ShellFix",
-        namespace: "palette",
-        slashName: "note",
-        run() {
-          try {
-            api.ui.dialog?.clear?.();
-            const tree = listTagTree();
-            if (tree.length === 0) {
-              api.ui.dialog?.replace?.(() =>
-                api.ui.DialogPrompt({
-                  title: "新建笔记",
-                  label: "#标签#:内容",
-                  placeholder: "#arch/db#:数据库连接池最大 10 连接",
-                  onConfirm: (input: string) => {
-                    dispatch(api, "note", input).then((handled) => {
-                      if (!handled) {
-                        api.client?.tui?.executeCommand?.({ command: `|note ${input}` });
-                      }
-                    });
-                  },
-                  onCancel: () => api.ui.dialog?.clear?.(),
-                })
-              );
-              return;
-            }
-            api.ui.dialog?.replace?.(() =>
-              api.ui.DialogSelect({
-                title: "选择笔记标签",
-                options: [
-                  { label: "📝 新建笔记", value: "__new__", description: "输入新笔记" },
-                  ...tree.map((t) => ({
-                    label: `#${t.endsWith("/") ? t.slice(0, -1) : t}#`,
-                    value: t,
-                    description: "",
-                  })),
-                ],
-                onSelect: (value: string) => {
-                  if (value === "__new__") {
-                    api.ui.dialog?.replace?.(() =>
-                      api.ui.DialogPrompt({
-                        title: "新建笔记",
-                        label: "#标签#:内容",
-                        placeholder: "#arch/db#:数据库连接池...",
-                        onConfirm: (input: string) => {
-                          dispatch(api, "note", input).then((handled) => {
-                            if (!handled) api.client?.tui?.executeCommand?.({ command: `|note ${input}` });
-                          });
-                        },
-                        onCancel: () => api.ui.dialog?.clear?.(),
-                      })
-                    );
-                  } else {
-                    dispatch(api, "note", `#${value}#`).then((handled) => {
-                      if (!handled) api.client?.tui?.executeCommand?.({ command: `|note #${value}#` });
-                    });
-                  }
-                },
-                onCancel: () => api.ui.dialog?.clear?.(),
-              })
-            );
-          } catch (e) {
-            console.error(`[ShellFix] palette error (shellfix.status):`, e);
-          }
+          try { showTemplateSystem(api); } catch (e) { console.error(`[ShellFix] palette error (shellfix.my):`, e); }
         },
       },
 
       // ── /auto ────────────────────────────────────────────────────
       {
+        name: "shellfix.note",
+        title: "ShellFix note 笔记标签",
+        category: SHELLFIX_CATEGORY,
+        namespace: "palette",
+        run() {
+          try { showNoteSystem(api); } catch (e) { console.error(`[ShellFix] palette error (shellfix.note):`, e); }
+        },
+      },
+      {
         name: "shellfix.auto",
-        title: "ShellFix 自动化系统",
-        category: "ShellFix",
+        title: "ShellFix auto 自动注入上下文",
+        category: SHELLFIX_CATEGORY,
         namespace: "palette",
         slashName: "auto",
         run() {
-          try {
-            api.ui.dialog?.clear?.();
-            const s = loadState();
-            const enabled = getEnabledAutoModules();
-            const options = AUTO_MODULES.map((mod) => ({
-              label: `${enabled.includes(mod.name) ? "✅" : "  "} ${mod.label}`,
-              value: mod.name,
-              description: `${mod.description} | ${enabled.includes(mod.name) ? "ON" : "OFF"}`,
-            }));
-            options.push({
-              label: "⚙️  模式设置",
-              value: "__mode__",
-              description: `当前: ${s.autoMode}`,
-            });
-            options.push({
-              label: "📋 查看全部",
-              value: "__list__",
-              description: "",
-            });
-            api.ui.dialog?.replace?.(() =>
-              api.ui.DialogSelect({
-                title: "自动化模块 (点击切换)",
-                options,
-                onSelect: (value: string) => {
-                  if (value === "__mode__") {
-                    api.ui.dialog?.replace?.(() =>
-                      api.ui.DialogSelect({
-                        title: "选择模式",
-                        options: [
-                          { label: "auto 静默", value: "auto", description: "自动注入，不提示" },
-                          { label: "prompt 引导", value: "prompt", description: "启动时引导用户选择" },
-                          { label: "silent 关闭", value: "silent", description: "不注入" },
-                        ],
-                        onSelect: (mode: string) => {
-                          setAutoMode(mode as AutoMode);
-                          api.ui.toast({ message: `模式: ${mode}` });
-                          api.ui.dialog?.clear?.();
-                        },
-                        onCancel: () => api.ui.dialog?.clear?.(),
-                      })
-                    );
-                  } else if (value === "__list__") {
-                    dispatch(api, "auto", "list").then((handled) => {
-                      if (!handled) api.client?.tui?.executeCommand?.({ command: "|auto list" });
-                    });
-                  } else {
-                    setAutoModule(value, !enabled.includes(value));
-                    api.ui.toast({ message: `${getAutoModule(value)?.label || value}: ${enabled.includes(value) ? "OFF" : "ON"}` });
-                    api.ui.dialog?.clear?.();
-                  }
-                },
-                onCancel: () => api.ui.dialog?.clear?.(),
-              })
-            );
-          } catch (e) {
-            console.error(`[ShellFix] palette error (shellfix.status):`, e);
-          }
+          try { showAutoSystem(api); } catch (e) { console.error(`[ShellFix] palette error (shellfix.auto):`, e); }
         },
       },
 
-      // ── /kickme ───────────────────────────────────────────────────
-      {
-        name: "shellfix.kickme",
-        title: "ShellFix 通知规则",
-        category: "ShellFix",
-        namespace: "palette",
-        slashName: "kickme",
-        run() {
-          try {
-            api.ui.dialog?.clear?.();
-            dispatch(api, "kickme", "").then((handled) => {
-              if (!handled) {
-                api.client?.tui?.executeCommand?.({ command: "|kickme" });
-              }
-            });
-          } catch (e) {
-            console.error(`[ShellFix] palette error (shellfix.status):`, e);
-          }
-        },
-      },
-
-      // ── /dynamic ─────────────────────────────────────────────────
-      {
-        name: "shellfix.dynamic",
-        title: "ShellFix 动态上下文注入",
-        category: "ShellFix",
-        namespace: "palette",
-        slashName: "dynamic",
-        run() {
-          try {
-            api.ui.dialog?.clear?.();
-            dispatch(api, "dynamic", "").then((handled) => {
-              if (!handled) {
-                api.client?.tui?.executeCommand?.({ command: "|dynamic" });
-              }
-            });
-          } catch (e) {
-            console.error(`[ShellFix] palette error (shellfix.status):`, e);
-          }
-        },
-      },
     ],
   });
 
@@ -1314,129 +654,19 @@ const tui: TuiPlugin = async (api, _options, _meta) => {
    * 辅助：从事件中提取文本内容
    * 兼容不同的 event.data 结构。
    */
-  function extractText(data: any): string {
-    if (!data) return "";
-    if (typeof data.text === "string") return data.text;
-    if (data.parts && Array.isArray(data.parts)) {
-      return data.parts
-        .map((p: any) => (p.type === "text" ? p.text : ""))
-        .join("\n");
-    }
-    if (data.content && typeof data.content === "string") return data.content;
-    return "";
-  }
-
-  /**
-   * 辅助：从文本中提取所有 #标签# 并自动保存笔记
-   */
-  function autoCollectTags(text: string): void {
-    if (!text) return;
-    const tagRe = /#([^#\s]+)#/g;
-    let match: RegExpExecArray | null;
-    while (true) {
-      match = tagRe.exec(text);
-      if (match === null) break;
-      const tag = match[1].trim();
-      if (!tag || tag.includes("#") || tag.includes(":")) continue;
-      // 提取标签后的一段内容作为笔记正文
-      const start = match.index + match[0].length;
-      const contextEnd = Math.min(start + 80, text.length);
-      const context = text.slice(match.index, contextEnd).replace(/\s+/g, " ").trim();
-      try {
-        saveNote(tag, context);
-        // 不弹 toast —— 批量采集时避免骚扰
-      } catch { /* 静默 */ }
-    }
-  }
-
-  /**
-   * 检查 kickme 规则，匹配时弹出 toast 通知
-   * @param scope 事件源 — "user" (用户消息) 或 "llm" (LLM 回复)
-   */
-  function checkKickmeRules(text: string, scope: "user" | "llm"): void {
-    if (!text) return;
-    const rules = getKickmeRules();
-    for (const rule of rules) {
-      if (!rule.enabled) continue;
-      if (rule.scope !== "both" && rule.scope !== scope) continue;
-      const matched = rule.matchType === "regex"
-        ? new RegExp(rule.pattern, "i").test(text)
-        : text.toLowerCase().includes(rule.pattern.toLowerCase());
-      if (matched) {
-        const message = rule.message.replace("{matched}", rule.pattern);
-        try {
-          api.ui.toast({ message: `${rule.title}: ${message}` });
-          if (rule.sound) {
-            api.attention?.notify?.({ title: rule.title, message });
-          }
-        } catch { /* 静默 */ }
-        break; // 每条文本只触发第一个匹配规则
-      }
-    }
-  }
-
-  /**
-   * 检查动态上下文规则，匹配时将注入内容写入 pendingDynamic 缓存
-   * system.transform 钩子会消费此缓存
-   */
-  function checkDynamicRules(text: string): void {
-    if (!text) return;
-    const rules = getDynamicRules();
-    for (const rule of rules) {
-      if (!rule.enabled) continue;
-      if (isDynamicOnCooldown(rule)) continue;
-      const matched = rule.matchType === "regex"
-        ? new RegExp(rule.trigger, "i").test(text)
-        : text.toLowerCase().includes(rule.trigger.toLowerCase());
-      if (matched) {
-        markDynamicTriggered(rule.id);
-        const s = loadState();
-        if (!s.pendingDynamic) s.pendingDynamic = [];
-        if (!s.pendingDynamic.includes(rule.id)) {
-          s.pendingDynamic.push(rule.id);
-          saveState(s);
-        }
-        break; // 每条文本只触发第一个匹配规则
-      }
-    }
-  }
-
-  // ── 订阅：用户消息被提交 ──────────────────────────────────────
-  api.event.on("session.next.prompted", (event: any) => {
-    try {
-      const data = event?.data;
-      if (!data) return;
-
-      const text = extractText(data);
-
-      if (text) setLastMessage(text);
-      autoCollectTags(text);
-      checkKickmeRules(text, "user");
-      checkDynamicRules(text);
-    } catch { /* 静默 */ }
-  });
-
-  // ── 订阅：LLM 回复完成 ─────────────────────────────────────────
-  api.event.on("session.next.text.ended", (event: any) => {
-    try {
-      const text = extractText(event?.data);
-      if (!text) return;
-
-      setLastMessage(text);
-      autoCollectTags(text);
-      checkKickmeRules(text, "llm");
-      checkDynamicRules(text);
-    } catch { /* 静默 */ }
-  });
+  // 事件钩子已简化 —— note/kickme/dynamic 订阅已移除
 
   // ── 会话级自动注入（mode === "prompt" 时弹窗） ─────────────
-  const s0 = loadState();
-  if (s0.auto.mode === "prompt") {
-    setTimeout(() => {
-      try {
-        showSessionModuleDialog(api);
-      } catch { /* 静默 */ }
-    }, 800);
+  // 暂时禁用：OpenCode DialogSelect 在 init 阶段渲染会崩溃
+  // V3 改为手动 palette 管理
+  // const s0 = loadState();
+  // if (s0.autoMode === "prompt") {
+  //   setTimeout(() => {
+  //     try { showSessionModuleDialog(api); } catch {}
+  //   }, 800);
+  // }
+  } catch (e) {
+    console.error(`[ShellFix] TUI plugin initialization failed:`, e);
   }
 };
 
@@ -1445,38 +675,628 @@ const tui: TuiPlugin = async (api, _options, _meta) => {
  * 选择的模块通过 setAutoModule 持久化，system.transform 钩子自动生效
  */
 function showSessionModuleDialog(api: any): void {
-  const current = getEnabledAutoModules();
-  const options = AUTO_MODULES.map((mod) => ({
-    label: `${current.includes(mod.name) ? "✅" : "  "} ${mod.label}`,
-    value: mod.name,
-    description: mod.description,
-  }));
-  options.unshift({
-    label: "✅ 完成选择",
-    value: "__done__",
-    description: "使用当前选中的模块",
-  });
+  try {
+    const current = getEnabledAutoModules();
+    const modules = AUTO_MODULES || [];
+    const options = modules.map((mod) => ({
+      label: `${current.includes(mod.name) ? "ON " : "OFF"} ${mod.label}`,
+      value: mod.name,
+      description: mod.description || "",
+    }));
+    options.unshift({
+      label: "完成选择",
+      value: "__done__",
+      description: "使用当前选中的模块",
+    });
+    api.ui.dialog?.replace?.(() =>
+      api.ui.DialogSelect({
+        title: "本次会话启用哪些模块？（点击切换，选完点「完成选择」）",
+        options,
+        onSelect: (value: string) => {
+          if (value === "__done__") {
+            api.ui.dialog?.clear?.();
+            return;
+          }
+          const fresh = getEnabledAutoModules();
+          const newEnabled = fresh.includes(value)
+            ? fresh.filter((n) => n !== value)
+            : [...fresh, value];
+          for (const mod of AUTO_MODULES) {
+            setAutoModule(mod.name, newEnabled.includes(mod.name));
+          }
+          showSessionModuleDialog(api);
+        },
+        onCancel: () => api.ui.dialog?.clear?.(),
+      })
+    );
+  } catch { /* TUI 渲染保护 */ }
+}
+
+/**
+ * 模板系统 — palette 交互
+ * 展示帮助/示例 + 当前状态，然后提供模板操作。
+ */
+function showTemplateSystem(api: any): void {
+  api.ui.dialog?.clear?.();
+  const all = listTemplates() || [];
+  const builtinCount = all.filter((t: any) => t.builtin).length;
+  const userCount = all.length - builtinCount;
+  const enabledText = userCount > 0
+    ? `已保存 ${userCount} 个用户模板 + ${builtinCount} 个内置`
+    : `${builtinCount} 个内置模板可用`;
+  const options: any[] = [
+    { label: "使用说明", value: "__help__", description: "示例和用法" },
+  ];
+  if (all.length === 0) {
+    api.ui.toast({ message: "暂无模板" });
+    return;
+  }
+  for (const t of all) {
+    options.push({ label: t.name, value: t.name, description: t.description || "" });
+  }
+  options.push(
+    { label: "编辑模板", value: "__edit__", description: `修改已保存的模板内容` },
+    { label: "查看全部", value: "__list__", description: "完整模板列表" },
+  );
   api.ui.dialog?.replace?.(() =>
     api.ui.DialogSelect({
-      title: "本次会话启用哪些模块？（点击切换，选完点「完成选择」）",
+      title: `模板系统 — ${enabledText}`,
       options,
-      onSelect: (value: string) => {
-        if (value === "__done__") {
-          api.ui.dialog?.clear?.();
-          return;
-        }
-        // 读取最新 state 并 toggle
-        const fresh = getEnabledAutoModules();
-        const newEnabled = fresh.includes(value)
-          ? fresh.filter((n) => n !== value)
-          : [...fresh, value];
-        for (const mod of AUTO_MODULES) {
-          setAutoModule(mod.name, newEnabled.includes(mod.name));
-        }
-        // 刷新弹窗显示新状态
-        showSessionModuleDialog(api);
+      onSelect: (name: string) => {
+        if (name === "__help__") return showTemplateHelp(api, all);
+        if (name === "__edit__") return showTemplateEditor(api, all);
+        if (name === "__list__") return showTemplateList(api);
+        showTemplateRender(api, name);
       },
       onCancel: () => api.ui.dialog?.clear?.(),
+    })
+  );
+}
+
+/** 模板使用帮助 + 示例 */
+function showTemplateHelp(api: any, all: any[]): void {
+  const lines = [
+    `模板系统 — 保存和执行预设文本模板`,
+    ``,
+    `用法：/my <模板名> [参数...]`,
+    `      Ctrl+P → 选择 ShellFix my 模板`,
+    ``,
+    `示例：`,
+    `  /my review          → 填入 Code Review Checklist`,
+    `  /my commit          → 填入 Commit Message 模板`,
+    `  /my explain         → 填入"解释这段代码"`,
+    `  /my save mynote ... → 保存新模板`,
+    `  /my rm mynote       → 删除模板`,
+    ``,
+    `内置模板数: ${all.filter((t: any) => t.builtin).length}`,
+    `用户模板:   ${all.filter((t: any) => !t.builtin).length}`,
+  ];
+  api.ui.dialog?.replace?.(() =>
+    api.ui.DialogAlert({
+      title: "模板系统 — 使用帮助",
+      message: lines.join("\n"),
+      onConfirm: () => showTemplateSystem(api),
+    })
+  );
+}
+
+/** 模板编辑子流程：选择模板 → 修改内容 → 保存 */
+function showTemplateEditor(api: any, all: any[]): void {
+  const editable = all.filter((t) => !t.builtin);
+  if (editable.length === 0) {
+    api.ui.toast({ message: "没有可编辑的用户模板" });
+    return;
+  }
+  api.ui.dialog?.replace?.(() =>
+    api.ui.DialogSelect({
+      title: "选择要编辑的模板",
+      options: editable.map((t) => ({
+        label: t.name,
+        value: t.name,
+        description: t.description || "",
+      })),
+      onSelect: (editName: string) => {
+        const tmpl = getTemplate(editName);
+        if (!tmpl) { api.ui.toast({ message: "不存在" }); return; }
+        api.ui.dialog?.replace?.(() =>
+          api.ui.DialogPrompt({
+            title: `编辑模板 "${editName}"`,
+            label: "新内容:",
+            defaultText: tmpl.template,
+            onConfirm: (content: string) => {
+              if (content.trim()) {
+                saveTemplate({ name: editName, template: content, description: tmpl.description });
+                api.ui.toast({ message: `模板 "${editName}" 已更新` });
+              } else {
+                api.ui.toast({ message: "内容不能为空" });
+              }
+              api.ui.dialog?.clear?.();
+            },
+            onCancel: () => api.ui.dialog?.clear?.(),
+          })
+        );
+      },
+      onCancel: () => api.ui.dialog?.clear?.(),
+    })
+  );
+}
+
+/** 查看全部模板 → 发 /my ? 到服务器 */
+function showTemplateList(api: any): void {
+  dispatch(api, "my", "?").then((handled) => {
+    if (!handled) api.client?.tui?.executeCommand?.({ command: "|my ?" });
+  });
+}
+
+/** 渲染并填入输入框：有参数则弹窗输入，无参数直接渲染 */
+function showTemplateRender(api: any, name: string): void {
+  const tmpl = getTemplate(name);
+  if (!tmpl || !tmpl.template) {
+    api.ui.toast({ message: `模板 "${name}" 无内容` });
+    return;
+  }
+  const paramCount = (tmpl.template.match(/\{(\d+)\}/g) || [])
+    .map((m) => parseInt(m.slice(1, -1), 10))
+    .filter((n) => !Number.isNaN(n))
+    .reduce((max, n) => Math.max(max, n), -1) + 1;
+  if (paramCount > 0) {
+    api.ui.dialog?.replace?.(() =>
+      api.ui.DialogPrompt({
+        title: `模板 "${name}" — 输入参数 (${paramCount} 个)`,
+        label: `参数 (空格分隔):`,
+        placeholder: "arg1 arg2 ...",
+        onConfirm: (input: string) => {
+          const args = input.trim().split(/\s+/);
+          const rendered = renderTemplate(tmpl.template, args);
+          if (rendered) {
+            api.client?.tui?.appendPrompt?.({ text: rendered });
+          } else {
+            api.ui.toast({ message: "渲染失败" });
+          }
+          api.ui.dialog?.clear?.();
+        },
+        onCancel: () => api.ui.dialog?.clear?.(),
+      })
+    );
+  } else {
+    const rendered = renderTemplate(tmpl.template, []);
+    if (rendered) {
+      api.client?.tui?.appendPrompt?.({ text: rendered });
+    } else {
+      api.ui.toast({ message: "渲染失败" });
+    }
+    api.ui.dialog?.clear?.();
+  }
+}
+
+/**
+ * 自动化系统 — palette 交互
+ * 显示帮助/状态总览 + 模块管理入口。
+ */
+function showAutoSystem(api: any): void {
+  api.ui.dialog?.clear?.();
+  const s = loadState() || {} as any;
+  const enabled = getEnabledAutoModules();
+  const onCount = enabled.length;
+  const options: any[] = [
+    { label: "使用说明", value: "__help__", description: "自动注入示例和模式" },
+    { label: "模式设置", value: "__mode__", description: `当前: ${s.autoMode}` },
+    { label: "查看全部", value: "__list__", description: "完整模块列表" },
+  ];
+  for (const mod of AUTO_MODULES) {
+    options.push({
+      label: `${enabled.includes(mod.name) ? "ON " : "OFF"} ${mod.label}`,
+      value: mod.name,
+      description: `${mod.description}`,
+    });
+  }
+  api.ui.dialog?.replace?.(() =>
+    api.ui.DialogSelect({
+      title: `自动化系统 — ${onCount}/${AUTO_MODULES.length} 模块开启`,
+      options,
+      onSelect: (value: string) => {
+        if (value === "__help__") return showAutoHelp(api);
+        if (value === "__mode__") return showAutoModeSelector(api);
+        if (value === "__list__") return showAutoModuleList(api);
+        setAutoModule(value, !enabled.includes(value));
+        api.ui.toast({ message: `${getAutoModule(value)?.label || value}: ${enabled.includes(value) ? "OFF" : "ON"}` });
+        api.ui.dialog?.clear?.();
+      },
+      onCancel: () => api.ui.dialog?.clear?.(),
+    })
+  );
+}
+
+/** 笔记标签系统 — palette 交互，显示用法 + 当前标签 */
+function showNoteSystem(api: any): void {
+  api.ui.dialog?.clear?.();
+  const all = listNotes();
+  const lines = [
+    `笔记标签系统 — 用 #标签# 记录关键信息`,
+    ``,
+    `当前: ${all.length} 条笔记`,
+    all.length > 0
+      ? all.slice(0, 10).map((n: any) => `  ${n.tag} → ${(n.content || "").slice(0, 40)}`).join("\n")
+      : `  (暂无笔记)`,
+    ``,
+    `用法：/note ?              列出所有标签`,
+    `      /note #标签#           取出笔记到输入框`,
+    `      /note #标签#:内容      保存笔记`,
+    `      /note #标签#:last      保存上一条消息`,
+    `      /note rm #标签#        删除笔记`,
+  ];
+  api.ui.dialog?.replace?.(() =>
+    api.ui.DialogAlert({
+      title: "ShellFix note 笔记标签",
+      message: lines.join("\n"),
+    })
+  );
+}
+
+/** 自动化系统使用帮助 + 示例 */
+function showAutoHelp(api: any): void {
+  const s = loadState() || {} as any;
+  const enabled = getEnabledAutoModules();
+  const lines = [
+    `自动化系统 — 自动注入上下文到 System Prompt`,
+    ``,
+    `模式：${s.autoMode}`,
+    `  auto    自动注入，不提示`,
+    `  prompt  启动时引导选择模块`,
+    `  silent  不注入`,
+    ``,
+    `已开启 ${enabled.length}/${AUTO_MODULES.length} 个模块：`,
+    ...AUTO_MODULES.filter((m) => enabled.includes(m.name)).map((m) => `  ${m.label} — ${m.description}`),
+    ``,
+    `用法：/auto list  查看完整列表`,
+    `      /auto <模块名>  开关模块`,
+    `      /auto mode prompt|auto|silent`,
+  ];
+  api.ui.dialog?.replace?.(() =>
+    api.ui.DialogAlert({
+      title: "自动化系统 — 使用帮助",
+      message: lines.join("\n"),
+      onConfirm: () => showAutoSystem(api),
+    })
+  );
+}
+
+/** 自动化模式选择子流程 */
+function showAutoModeSelector(api: any): void {
+  api.ui.dialog?.replace?.(() =>
+    api.ui.DialogSelect({
+      title: "选择模式",
+      options: [
+        { label: "auto 静默", value: "auto", description: "自动注入，不提示" },
+        { label: "prompt 引导", value: "prompt", description: "启动时引导用户选择" },
+        { label: "silent 关闭", value: "silent", description: "不注入" },
+      ],
+      onSelect: (mode: string) => {
+        setAutoMode(mode as AutoMode);
+        api.ui.toast({ message: `模式: ${mode}` });
+        api.ui.dialog?.clear?.();
+      },
+      onCancel: () => api.ui.dialog?.clear?.(),
+    })
+  );
+}
+
+/** 查看全部自动化模块 → 发 /auto list 到服务器 */
+function showAutoModuleList(api: any): void {
+  dispatch(api, "auto", "list").then((handled) => {
+    if (!handled) api.client?.tui?.executeCommand?.({ command: "|auto list" });
+  });
+}
+
+// ====================================================================
+// ShellFix 设置面板 — palette 辅助函数
+// ====================================================================
+
+function getEnabledRuleCount(s: any): number {
+  return Object.values(s.cmdRules || {}).filter(Boolean).length;
+}
+
+function toggleAndToast(api: any, label: string, newState: boolean): void {
+  api.ui.toast({ message: `${label}: ${newState ? "ON" : "OFF"}` });
+  api.ui.dialog?.clear?.();
+}
+
+/** 显示当前状态 + 描述，确认后切换 */
+const TOGGLE_META: Record<string, { label: string; desc: string; stateKey?: string }> = {
+  encoding: { label: "编码注入", desc: "每条命令前自动注入 UTF-8 编码设置，解决中文乱码" },
+  log: { label: "日志", desc: "开关控制台日志输出，用于调试" },
+  banner: { label: "启动版本信息", desc: "OpenCode 启动时显示 ShellFix vX.X.X loaded", stateKey: "showVersion" },
+};
+
+function showToggleInfo(api: any, key: string, toggleFn: () => boolean): void {
+  const s = loadState() || {} as any;
+  const meta = TOGGLE_META[key];
+  const label = meta?.label || key;
+  const desc = meta?.desc || "";
+  const stateKey = meta?.stateKey || key;
+  const current = s[stateKey];
+  api.ui.dialog?.replace?.(() =>
+    api.ui.DialogAlert({
+      title: `ShellFix ${key} ${label}`,
+      message: `${desc}\n\n当前: ${current ? "ON" : "OFF"}\n\n点击确认切换`,
+      onConfirm: () => {
+        const next = toggleFn();
+        api.ui.toast({ message: `${label}: ${next ? "ON" : "OFF"}` });
+        api.ui.dialog?.clear?.();
+      },
+    })
+  );
+}
+
+/** Git 非交互变量 — 展示已注入的 16 个环境变量 */
+function showGitEnv(api: any): void {
+  const vars = [
+    "CI=true",
+    "GIT_TERMINAL_PROMPT=0",
+    "GCM_INTERACTIVE=never",
+    "GIT_EDITOR=:",
+    "EDITOR=:",
+    "VISUAL=",
+    "GIT_SEQUENCE_EDITOR=:",
+    "GIT_MERGE_AUTOEDIT=no",
+    "GIT_PAGER=cat",
+    "PAGER=cat",
+    "DEBIAN_FRONTEND=noninteractive",
+    "HOMEBREW_NO_AUTO_UPDATE=1",
+    "npm_config_yes=true",
+    "PIP_NO_INPUT=1",
+    "YARN_ENABLE_IMMUTABLE_INSTALLS=false",
+    "SHELLFIX_VERSION=" + PLUGIN_VERSION,
+  ];
+  api.ui.dialog?.replace?.(() =>
+    api.ui.DialogAlert({
+      title: "ShellFix git-env 非交互变量",
+      message:
+        `已注入 ${vars.length} 个环境变量，子进程自动继承。` +
+        `相比官方 non-interactive-env 插件：不污染命令字符串，` +
+        `每条命令省 ~150 tokens。\n\n` +
+        vars.map((v) => `  ${v}`).join("\n") +
+        `\n\n建议在 oh-my-openagent.jsonc 中禁用内置插件以避免重复注入：` +
+        `\n"disabled_hooks": ["non-interactive-env"]` +
+        `\n详见 README.md。`,
+    })
+  );
+}
+
+/** 关键词通知系统 — kickme 使用帮助 + 当前规则 */
+function showKickme(api: any): void {
+  const rules = getKickmeRules();
+  const enabledCount = rules.filter((r) => r.enabled).length;
+  const lines = [
+    `关键词通知系统 kickme — 匹配关键词时弹气泡`,
+    ``,
+    `当前: ${rules.length} 条规则 (${enabledCount} 条启用)`,
+    ``,
+    `用法 (斜杠命令, 通过 LLM 执行):`,
+    `  /kickme                   列出所有规则`,
+    `  /kickme add <关键词> <标题> <消息> 添加规则`,
+    `  /kickme rm <id>           删除规则`,
+    `  /kickme on|off <id>       开关规则`,
+    `  /kickme sound <id> on|off 开关提示音`,
+    ``,
+    `通知会在消息匹配时通过 api.ui.toast() 弹出。`,
+    `V3 计划：Windows 系统弹窗 + MCP 集成。`,
+  ];
+  api.ui.dialog?.replace?.(() =>
+    api.ui.DialogAlert({
+      title: "ShellFix kickme 关键词通知",
+      message: lines.join("\n"),
+    })
+  );
+}
+
+function showShellFixStatus(api: any): void {
+  const s = loadState() || {} as any;
+  const kickmeRules = getKickmeRules();
+  const enabledKickme = kickmeRules.filter((r) => r.enabled).length;
+  const lines: string[] = [
+    `ShellFix v${PLUGIN_VERSION}`,
+    ``,
+    `  encoding       ${s.encoding ? "ON" : "OFF"}`,
+    `  bash           ${getEnabledRuleCount(s)}/6`,
+    `  log            ${s.log ? "ON" : "OFF"}`,
+    `  git-env        16 env vars`,
+    `  git-eol        ${s.gitLineEnding === "auto" ? "AUTO" : s.gitLineEnding === "config" ? "CONFIG" : "OFF"}`,
+    `  kickme         ${kickmeRules.length} rules (${enabledKickme} on)`,
+    `  banner         ${s.showVersion !== false ? "ON" : "OFF"}`,
+  ];
+  api.ui.dialog?.replace?.(() =>
+    api.ui.DialogAlert({
+      title: "ShellFix 状态总览",
+      message: lines.join("\n"),
+    })
+  );
+}
+
+function showCmdRules(api: any): void {
+  const s = loadState() || {} as any;
+  const options = CMD_RULES_META.map((meta) => ({
+    label: `${s.cmdRules[meta.name] ? "ON " : "OFF"} ${meta.label}`,
+    value: meta.name,
+    description: `${meta.description}`,
+  }));
+  api.ui.dialog?.replace?.(() =>
+    api.ui.DialogSelect({
+      title: "命令替换规则 (点击切换)",
+      options,
+      onSelect: (value: string) => {
+        setCmdRule(value as CmdRuleName, !s.cmdRules[value as CmdRuleName]);
+        api.ui.toast({ message: `${CMD_RULES_META.find((m) => m.name === value)?.label || value}: ${!s.cmdRules[value as CmdRuleName] ? "ON" : "OFF"}` });
+        api.ui.dialog?.clear?.();
+      },
+      onCancel: () => api.ui.dialog?.clear?.(),
+    })
+  );
+}
+
+function showGitLineEnding(api: any): void {
+  const s = loadState() || {} as any;
+  api.ui.dialog?.replace?.(() =>
+    api.ui.DialogSelect({
+      title: "Git 换行符警告处理",
+      options: [
+        { label: `${s.gitLineEnding === "auto" ? "ON " : "   "} auto — 环境变量注入`, value: "auto", description: "仅 OpenCode 进程内生效（推荐）" },
+        { label: `${s.gitLineEnding === "config" ? "ON " : "   "} config — 全局 Git 配置`, value: "config", description: "生成 git config 命令供执行" },
+        { label: `${s.gitLineEnding === "off" ? "ON " : "   "} off — 关闭`, value: "off", description: "不处理换行符警告" },
+      ],
+      onSelect: (value: string) => {
+        const s2 = loadState();
+        s2.gitLineEnding = value as "auto" | "config" | "off";
+        saveState(s2);
+        if (value === "config") {
+          api.ui.dialog?.replace?.(() =>
+            api.ui.DialogAlert({
+              title: "Git 换行符 — 全局配置",
+              message: "请在终端执行以下命令（或发送给 Agent 执行）：\n\n"
+                + "git config --global core.autocrlf false\n"
+                + "git config --global core.safecrlf false\n\n"
+                + "已切换为 CONFIG 模式。",
+            })
+          );
+        } else {
+          api.ui.toast({ message: `Git 换行符处理: ${value === "auto" ? "AUTO ON" : value === "config" ? "CONFIG" : "OFF"}` });
+          api.ui.dialog?.clear?.();
+        }
+      },
+      onCancel: () => api.ui.dialog?.clear?.(),
+    })
+  );
+}
+
+function showDoctor(api: any): void {
+  const os = require("os");
+  const lines: string[] = [
+    `ShellFix v${PLUGIN_VERSION} — 环境诊断`,
+    ``,
+    `OS:        ${os.platform()} ${os.release()}`,
+    `Hostname:  ${os.hostname()}`,
+    `Arch:      ${os.arch()}`,
+    `Home:      ${os.homedir()}`,
+  ];
+  // 检测 shell 版本
+  try {
+    const { execSync } = require("child_process");
+    if (os.platform() === "win32") {
+      const psVer = execSync(
+        'powershell -NoProfile -Command "$PSVersionTable.PSVersion.ToString()"',
+        { encoding: "utf8", timeout: 5000 }
+      ).trim();
+      lines.push(`Shell:     PowerShell ${psVer}`);
+    } else {
+      const bashVer = execSync("bash --version | head -1", {
+        encoding: "utf8",
+        timeout: 5000,
+      }).trim();
+      lines.push(`Shell:     ${bashVer}`);
+    }
+  } catch {
+    lines.push(`Shell:     (detection failed)`);
+  }
+  api.ui.dialog?.replace?.(() =>
+    api.ui.DialogAlert({
+      title: "环境诊断",
+      message: lines.join("\n"),
+    })
+  );
+}
+
+/**
+ * ShellFix 关于 — 显示版本信息并检测更新
+ * 通过 GitHub API 查询最新版本号，与当前版本对比。
+ */
+async function showAbout(api: any): Promise<void> {
+  const lines: string[] = [
+    `ShellFix v${PLUGIN_VERSION}`,
+    `OpenCode Windows PowerShell 插件`,
+    ``,
+    `功能：`,
+    `  编码注入 — 中文不乱码`,
+    `  命令规则 — export/which/touch 等自动转换`,
+    `  日志开关`,
+    `  Git 免交互 + 换行符静默`,
+    `  模板系统`,
+    `  自动化系统`,
+    `  笔记标签`,
+    `  通知系统 (kickme)`,
+    ``,
+    `项目: https://github.com/LoongBa/OpenCode-Plugins-ShellFix`,
+    `作者: loongba.cn`,
+    ``,
+    `正在检测更新...`,
+  ];
+  api.ui.dialog?.replace?.(() =>
+    api.ui.DialogAlert({
+      title: `ShellFix 关于 v${PLUGIN_VERSION}`,
+      message: lines.join("\n"),
+    })
+  );
+  // 异步检测更新
+  try {
+    const res = await fetch("https://api.github.com/repos/LoongBa/OpenCode-Plugins-ShellFix/releases/latest", {
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json() as any;
+    const latestTag: string = (data.tag_name || "").replace(/^v/, "");
+    if (latestTag && latestTag !== PLUGIN_VERSION) {
+      lines.pop(); // 移除 "正在检测更新..."
+      lines.push(``);
+      lines.push(`📢 新版本可用: v${latestTag}`);
+      lines.push(`   当前版本: v${PLUGIN_VERSION}`);
+      lines.push(`   ${data.html_url || "https://github.com/LoongBa/OpenCode-Plugins-ShellFix/releases"}`);
+    } else if (latestTag) {
+      lines.pop();
+      lines.push(``);
+      lines.push(`✅ 已是最新版本 (v${PLUGIN_VERSION})`);
+    } else {
+      lines.pop();
+      lines.push(``);
+      lines.push(`⚠️ 无法获取版本信息`);
+    }
+  } catch {
+    lines.pop(); // 移除 "正在检测更新..."
+    lines.push(``);
+    lines.push(`⚠️ 检测更新失败（网络或 API 限制）`);
+    lines.push(`   当前版本: v${PLUGIN_VERSION}`);
+  }
+  api.ui.dialog?.replace?.(() =>
+    api.ui.DialogAlert({
+      title: `ShellFix 关于 v${PLUGIN_VERSION}`,
+      message: lines.join("\n"),
+    })
+  );
+}
+
+function showShellFixHelp(api: any): void {
+  const lines = [
+    `ShellFix v${PLUGIN_VERSION} — palette 命令`,
+    ``,
+    `shellfix           status 状态总览`,
+    `shellfix.encoding  encoding 中文不乱码`,
+    `shellfix.bash      bash 适配 Powershell 避免出错`,
+    `shellfix.log       log 记录操作信息`,
+    `shellfix.git-env     git-env 避免等待交互`,
+    `shellfix.git-eol    git-eol 避免换行警告`,
+    `shellfix.sysinfo    sysinfo 查看系统信息`,
+    `shellfix.about     about 版本与更新`,
+    `shellfix.help      help 命令参考`,
+    `shellfix.kickme    kickme 关键词通知`,
+    `shellfix.banner    banner 启动版本信息`,
+    `shellfix.my        my 预设文本模板`,
+    `shellfix.note      note 笔记标签`,
+    `shellfix.auto      auto 自动注入上下文`,
+    ``,
+    `所有命令通过 Ctrl+P 访问。`,
+  ];
+  api.ui.dialog?.replace?.(() =>
+    api.ui.DialogAlert({
+      title: "ShellFix 帮助",
+      message: lines.join("\n"),
     })
   );
 }

@@ -69,11 +69,6 @@ import {
   clearModuleConditions,
   getSyncConfig,
   setSyncConfig,
-  getKickmeRules,
-  addKickmeRule,
-  removeKickmeRule,
-  toggleKickmeRule,
-  setKickmeSound,
   CMD_RULES_META,
   PLUGIN_VERSION,
   type CmdRuleName,
@@ -199,9 +194,6 @@ const ENCODING_PREFIX =
 
 const PLUGIN_NAME = "ShellFix";
 
-/** tool.execute.after 检测到换行符警告后标记已通知（避免重复日志） */
-let _gitLineEndingNotified = false;
-
 const CI_ENV_VARS: Record<string, string> = {
   CI: "true",
   SHELLFIX_VERSION: PLUGIN_VERSION,
@@ -221,10 +213,8 @@ const CI_ENV_VARS: Record<string, string> = {
   YARN_ENABLE_IMMUTABLE_INSTALLS: "false",
 };
 
-// shellfix 特殊指令（tool.execute.before 中保留兼容）
-const SPECIAL_CMD_RE = /^\s*[/#]shellfix\b/;
-const PIPE_CMD_RE = /^\s*\|(shellfix|my|note|auto|kickme|dynamic)(?:\s|$)/;
-const SLASH_CMD_RE = /^\s*\/(shellfix|my|note|auto|kickme|dynamic)(?:\s|$)/;
+const PIPE_CMD_RE = /^\s*\|(my|auto)(?:\s|$)/;
+const SLASH_CMD_RE = /^\s*\/(my|auto)(?:\s|$)/;
 
 // ====================================================================
 // 新增命令规则正则
@@ -242,12 +232,14 @@ const CHMOD_RE = /^\s*chmod\s+/;
 
 export const ShellFixPlugin: Plugin = async () => {
   const state = loadState();
-  console.log(
-    `[${PLUGIN_NAME}] v${PLUGIN_VERSION} loaded — ` +
-      `encoding:${state.encoding ? "ON" : "OFF"} ` +
-      `rules:${getEnabledRuleNames(state).length} ` +
-      `log:${state.log ? "ON" : "OFF"}`
-  );
+  if (state.showVersion !== false) {
+    console.log(
+      `[${PLUGIN_NAME}] v${PLUGIN_VERSION} loaded — ` +
+        `encoding:${state.encoding ? "ON" : "OFF"} ` +
+        `rules:${getEnabledRuleNames(state).length} ` +
+        `log:${state.log ? "ON" : "OFF"}`
+    );
+  }
 
   return {
     // ================================================================
@@ -281,45 +273,30 @@ export const ShellFixPlugin: Plugin = async () => {
       const cmd: string | undefined = out.args?.command as string | undefined;
       if (typeof cmd !== "string") return;
 
-      // 仅保留 /shellfix 兼容（command.execute.before 是首选路径）
-      if (SPECIAL_CMD_RE.test(cmd)) {
-        out.args.command = buildShellFixPanelCmd();
-        return;
-      }
-
-      // 管道命令后备方案：|my |note |auto |shellfix
+      // 管道命令后备方案：|my |auto
       const pipeMatch = cmd.match(PIPE_CMD_RE);
       if (pipeMatch) {
         const pipeCmd = pipeMatch[1];
         const pipeArgs = cmd.slice(pipeMatch[0].length).trim();
         let text = "";
         switch (pipeCmd) {
-          case "shellfix": text = handleShellFixCommand(pipeArgs); break;
-          case "my":       text = handleMyCommand(pipeArgs); break;
-          case "note":     text = handleNoteCommand(pipeArgs); break;
-          case "auto":     text = handleAutoCommand(pipeArgs); break;
-          case "kickme":   text = handleKickmeCommand(pipeArgs); break;
-          case "dynamic":  text = handleDynamicCommand(pipeArgs); break;
+          case "my":   text = handleMyCommand(pipeArgs); break;
+          case "auto": text = handleAutoCommand(pipeArgs); break;
         }
-        // 转义单引号后用 Write-Host 输出
         const escaped = text.replace(/'/g, "''");
         out.args.command = `${ENCODING_PREFIX}Write-Host '${escaped}'`;
         return;
       }
 
-      // 斜杠命令后备方案：/my /note /auto /shellfix
+      // 斜杠命令后备方案：/my /auto
       const slashMatch = cmd.match(SLASH_CMD_RE);
       if (slashMatch) {
         const slashCmd = slashMatch[1];
         const slashArgs = cmd.slice(slashMatch[0].length).trim();
         let text = "";
         switch (slashCmd) {
-          case "shellfix": text = handleShellFixCommand(slashArgs); break;
-          case "my":       text = handleMyCommand(slashArgs); break;
-          case "note":     text = handleNoteCommand(slashArgs); break;
-          case "auto":     text = handleAutoCommand(slashArgs); break;
-          case "kickme":   text = handleKickmeCommand(slashArgs); break;
-          case "dynamic":  text = handleDynamicCommand(slashArgs); break;
+          case "my":   text = handleMyCommand(slashArgs); break;
+          case "auto": text = handleAutoCommand(slashArgs); break;
         }
         const escaped = text.replace(/'/g, "''");
         out.args.command = `${ENCODING_PREFIX}Write-Host '${escaped}'`;
@@ -358,20 +335,6 @@ export const ShellFixPlugin: Plugin = async () => {
     },
 
     // ================================================================
-    // 钩子 B1: tool.execute.after — 工具执行后检测
-    // ================================================================
-    "tool.execute.after": async (input) => {
-      if (_gitLineEndingNotified) return;
-      const { tool } = input as { tool: string };
-      if (tool !== "bash" && tool !== "pwsh") return;
-
-      const s = loadState();
-      if (s.gitLineEnding === "off") return;
-      _gitLineEndingNotified = true;
-      console.log(`[ShellFix] 检测到 Git 换行符警告。用 /shellfix git-line-ending 配置处理方式。`);
-    },
-
-    // ================================================================
     // 钩子 C: command.execute.before — 斜杠命令入口（SDK 官方支持）
     // ================================================================
     "command.execute.before": async (input, output) => {
@@ -385,23 +348,11 @@ export const ShellFixPlugin: Plugin = async () => {
       let text = "";
 
       switch (command) {
-        case "shellfix":
-          text = handleShellFixCommand(args.trim());
-          break;
         case "my":
           text = handleMyCommand(args.trim());
           break;
-        case "note":
-          text = handleNoteCommand(args.trim());
-          break;
         case "auto":
           text = handleAutoCommand(args.trim());
-          break;
-        case "kickme":
-          text = handleKickmeCommand(args.trim());
-          break;
-        case "dynamic":
-          text = handleDynamicCommand(args.trim());
           break;
         default:
           return; // 不处理未知命令
@@ -500,10 +451,9 @@ export const ShellFixPlugin: Plugin = async () => {
       const out = output as { context?: string[]; prompt?: string };
       const chunks: string[] = [];
 
-      // 保留活跃的注入模块内容
-      const enabledModules = getEnabledAutoModules();
+      // 保留活跃的注入模块内容（含条件检查）
       for (const mod of AUTO_MODULES) {
-        if (enabledModules.includes(mod.name) && mod.content) {
+        if (getCachedShouldInject(mod.name) && mod.content) {
           chunks.push(`[模块: ${mod.name}]\n${mod.content}`);
         }
       }
@@ -557,364 +507,6 @@ function applyRmRule(cmd: string): string {
 
 function applyChmodRule(cmd: string): string {
   return cmd.replace(CHMOD_RE, "# chmod ignored on Windows; ");
-}
-
-// ====================================================================
-// 状态面板（PowerShell）
-// ====================================================================
-
-function buildShellFixPanelCmd(): string {
-  const s = loadState();
-  const lines: string[] = [];
-  lines.push(`${ENCODING_PREFIX}`);
-  lines.push(`Write-Host "";`);
-  lines.push(`Write-Host "[${PLUGIN_NAME}] v${PLUGIN_VERSION}" -ForegroundColor Cyan;`);
-  lines.push(`Write-Host "  ├ 中文不乱码: ${statusEmoji(s.encoding)} $(${s.encoding ? '' : 'Disabled - '})UTF-8 encoding prefix" -ForegroundColor ${s.encoding ? 'Green' : 'DarkYellow'};`);
-
-  const enabledRules = CMD_RULES_META.filter((r) => s.cmdRules[r.name]);
-  if (enabledRules.length > 0) {
-    // 第一行带 ├
-    const first = enabledRules[0];
-    lines.push(`Write-Host "  ├ ${first.label}: ${statusEmoji(true)}" -ForegroundColor Green;`);
-    for (let i = 1; i < enabledRules.length; i++) {
-      lines.push(`Write-Host "  │ ${enabledRules[i].label}: ${statusEmoji(true)}" -ForegroundColor Green;`);
-    }
-  }
-
-  lines.push(`Write-Host "  ├ Git 免交互: ${Object.keys(CI_ENV_VARS).length} env vars via shell.env" -ForegroundColor Green;`);
-
-  // doctor 摘要（无额外开销）
-  lines.push(`Write-Host "  └ doctor: PowerShell $(\$PSVersionTable.PSVersion.ToString()) / Encoding: $([Console]::OutputEncoding.WebName)" -ForegroundColor DarkGray;`);
-  lines.push(`Write-Host "";`);
-
-  return lines.join("");
-}
-
-function statusEmoji(on: boolean): string {
-  return on ? "ON" : "OFF";
-}
-
-// ====================================================================
-// /shellfix 命令处理
-// ====================================================================
-
-function handleShellFixCommand(args: string): string {
-  if (!args) return buildShellFixPanel();
-
-  const tokens = args.split(/\s+/);
-  const sub = tokens[0].toLowerCase();
-
-  switch (sub) {
-    case "cmd":
-      return handleCmdSub(tokens.slice(1));
-    case "encoding":
-      return handleEncodingSub(tokens.slice(1));
-    case "log":
-      return handleLogSub(tokens.slice(1));
-    case "doctor":
-      return collectDoctorReport();
-    case "git-line-ending":
-      return handleGitLineEndingSub(tokens.slice(1));
-    case "help":
-      return buildShellFixHelp();
-    default:
-      return `⚠️ 未知子命令: ${sub}\n\n${buildShellFixHelp()}`;
-  }
-}
-
-function handleCmdSub(args: string[]): string {
-  const s = loadState();
-
-  if (args.length === 0) {
-    // 列出所有规则 + 状态
-    const lines: string[] = [`ShellFix — 命令替换规则\n`];
-    for (const meta of CMD_RULES_META) {
-      const state = s.cmdRules[meta.name] ? "ON" : "OFF";
-      lines.push(`  ${state}  ${meta.label}`);
-      lines.push(`       ${meta.description}`);
-      lines.push("");
-    }
-    lines.push(`使用：/shellfix cmd <规则名> on/off`);
-    return lines.join("\n");
-  }
-
-  const ruleName = args[0] as CmdRuleName;
-  const meta = CMD_RULES_META.find((m) => m.name === ruleName);
-  if (!meta) {
-    return `未知规则: ${ruleName}\n可用规则: ${CMD_RULES_META.map((m) => m.name).join(", ")}`;
-  }
-
-  if (args.length === 1) {
-    // 查看单条规则状态
-    return `${meta.label}: ${s.cmdRules[ruleName] ? "ON" : "OFF"}\n${meta.description}`;
-  }
-
-  const action = args[1].toLowerCase();
-  if (action === "on") {
-    setCmdRule(ruleName, true);
-    return `${meta.label}: ON`;
-  } else if (action === "off") {
-    setCmdRule(ruleName, false);
-    return `${meta.label}: OFF`;
-  } else {
-    return `用法: /shellfix cmd ${ruleName} on|off`;
-  }
-}
-
-function handleEncodingSub(args: string[]): string {
-  const s = loadState();
-
-  if (args.length === 0) {
-    return [
-      `ShellFix — 编码注入\n`,
-      `状态: ${s.encoding ? "ON" : "OFF"}`,
-      `当前编码: ${s.encoding ? "UTF-8（自动注入）" : "关闭（系统默认编码）"}`,
-      ``,
-      `用法：`,
-      `  /shellfix encoding on    开启编码前缀`,
-      `  /shellfix encoding off   关闭编码前缀`,
-      `  /shellfix encoding       查看当前状态`,
-    ].join("\n");
-  }
-
-  const action = args[0].toLowerCase();
-  if (action === "on") {
-    const s2 = loadState();
-    s2.encoding = true;
-    saveState(s2);
-    return "编码注入: ON";
-  } else if (action === "off") {
-    const s2 = loadState();
-    s2.encoding = false;
-    saveState(s2);
-    return "编码注入: OFF";
-  } else {
-    return `用法: /shellfix encoding on|off`;
-  }
-}
-
-function handleLogSub(args: string[]): string {
-  const s = loadState();
-
-  if (args.length === 0) {
-    return [
-      `ShellFix — 日志输出\n`,
-      `状态: ${s.log ? "ON" : "OFF"}`,
-      ``,
-      `用法：`,
-      `  /shellfix log on    开启日志`,
-      `  /shellfix log off   关闭日志`,
-      `  /shellfix log       查看当前状态`,
-    ].join("\n");
-  }
-
-  const action = args[0].toLowerCase();
-  if (action === "on") {
-    const s2 = loadState();
-    s2.log = true;
-    saveState(s2);
-    return "日志: ON";
-  } else if (action === "off") {
-    const s2 = loadState();
-    s2.log = false;
-    saveState(s2);
-    return "日志: OFF";
-  } else {
-    return `用法: /shellfix log on|off`;
-  }
-}
-
-// ====================================================================
-// /shellfix git-line-ending — Git 换行符警告处理
-// ====================================================================
-
-function handleGitLineEndingSub(args: string[]): string {
-  const s = loadState();
-  const modeLabels: Record<string, string> = { auto: "环境变量注入（仅 OpenCode）", config: "全局 Git 配置", off: "关闭" };
-
-  if (args.length === 0) {
-    return [
-      `ShellFix — Git 换行符警告处理\n`,
-      `状态: ${s.gitLineEnding === "auto" ? "AUTO" : s.gitLineEnding === "config" ? "CONFIG" : "OFF"}`,
-      `模式: ${modeLabels[s.gitLineEnding]}`,
-      ``,
-      ``,
-      `用法：`,
-      `  /shellfix git-line-ending auto     环境变量注入（默认，仅 OpenCode 生效）`,
-      `  /shellfix git-line-ending config   生成 git config 命令`,
-      `  /shellfix git-line-ending off      关闭`,
-    ].join("\n");
-  }
-
-  const action = args[0].toLowerCase();
-
-  if (action === "auto") {
-    const s2 = loadState();
-    s2.gitLineEnding = "auto";
-    saveState(s2);
-    _gitLineEndingNotified = true;
-    return "Git 换行符处理: AUTO ✅ 下次 OpenCode 启动后生效（环境变量注入）";
-  }
-
-  if (action === "config") {
-    const s2 = loadState();
-    s2.gitLineEnding = "config";
-    saveState(s2);
-    _gitLineEndingNotified = true;
-    return [
-      "Git 换行符处理: CONFIG ✅",
-      "请在终端执行以下命令写入 Git 全局配置（永久生效）：\n",
-      "git config --global core.autocrlf false",
-      "git config --global core.safecrlf false",
-    ].join("\n");
-  }
-
-  if (action === "off") {
-    const s2 = loadState();
-    s2.gitLineEnding = "off";
-    saveState(s2);
-    return "Git 换行符处理: OFF";
-  }
-
-  return `用法: /shellfix git-line-ending auto|config|off`;
-}
-
-// ====================================================================
-// 状态面板（文本版，用于 command.execute.before）
-// ====================================================================
-
-function buildShellFixPanel(): string {
-  const s = loadState();
-  const lines: string[] = [];
-
-  lines.push(`╔══════════════════════════════════════╗`);
-  lines.push(`║ ${PLUGIN_NAME} v${PLUGIN_VERSION}              ║`);
-  lines.push(`╠══════════════════════════════════════╣`);
-  lines.push(`║                                      ║`);
-  lines.push(`║  encoding  ${fmtToggle(s.encoding)}  中文不乱码         ║`);
-  lines.push(`║                                      ║`);
-
-  for (const meta of CMD_RULES_META) {
-    const on = s.cmdRules[meta.name];
-    lines.push(`║  ${meta.label.padEnd(22)} ${fmtToggle(on)}  ║`);
-  }
-
-  lines.push(`║                                      ║`);
-  lines.push(`║  log       ${fmtToggle(s.log)}  日志输出           ║`);
-  lines.push(`║                                      ║`);
-  lines.push(`║  注入系统: ${fmtToggle(s.autoMode !== "silent")} auto上下文        ║`);
-  const activeCount = getActiveInjectModules().length;
-  const enabledCount = getEnabledAutoModules().length;
-  lines.push(`║  已启用: ${activeCount}/${AUTO_MODULES.length} 模块 (条件:${enabledCount}开)  ║`);
-  lines.push(`║                                      ║`);
-  lines.push(`║  Git 免交互: ${Object.keys(CI_ENV_VARS).length} env vars    ║`);
-  lines.push(`║  git-line-ending [${(s.gitLineEnding || "auto").toUpperCase().padEnd(4)}]  Git 换行符警告静默   ║`);
-  lines.push(`║                                      ║`);
-  const syncCfg = getSyncConfig();
-  const syncOn = syncCfg.repoUrl ? "ON" : "OFF";
-  lines.push(`║  sync     [${syncOn}]  远程模板仓库        ║`);
-  if (syncCfg.repoUrl) {
-    const counts = countTemplatesBySource();
-    lines.push(`║  内置:${String(counts.builtin).padStart(2)} 用户:${String(counts.user).padStart(2)} 远程:${String(counts.remote).padStart(2)}         ║`);
-  }
-  lines.push(`║                                      ║`);
-  lines.push(`╟─ doctor ──────────────────────────────╢`);
-
-  try {
-    lines.push(`║  OS: ${os.platform()} ${os.release()}               ║`);
-  } catch { /* */ }
-
-  lines.push(`║                                      ║`);
-  lines.push(`║  /shellfix help  查看全部子命令        ║`);
-  lines.push(`╚══════════════════════════════════════╝`);
-
-  return lines.join("\n");
-}
-
-function fmtToggle(on: boolean): string {
-  return on ? "[ON] " : "[OFF]";
-}
-
-// ====================================================================
-// doctor — 环境诊断
-// ====================================================================
-
-function collectDoctorReport(): string {
-  const s = loadState();
-  const lines: string[] = [];
-
-  lines.push(`╔══════════════════════════════════════╗`);
-  lines.push(`║ ShellFix v${PLUGIN_VERSION} — 环境诊断      ║`);
-  lines.push(`╠══════════════════════════════════════╣`);
-
-  // 基础信息
-  try {
-    lines.push(`║ OS: ${os.platform()} ${os.release()}`);
-    lines.push(`║ Hostname: ${os.hostname()}`);
-    lines.push(`║ Arch: ${os.arch()}`);
-  } catch { /* */ }
-
-  // PowerShell 信息（仅 tool.execute.before 才能获取，这里简单展示）
-  lines.push(`║ Plugins: ${PLUGIN_NAME} v${PLUGIN_VERSION}`);
-  lines.push(`╚══════════════════════════════════════╝`);
-
-  return lines.join("\n");
-}
-
-// ====================================================================
-// 帮助
-// ====================================================================
-
-function buildShellFixHelp(): string {
-  return [
-    `ShellFix 命令帮助\n`,
-    `/shellfix                   状态面板`,
-    `/shellfix cmd               列出所有命令替换规则`,
-    `/shellfix cmd <name> on/off 开关规则`,
-    `/shellfix encoding on/off   开关编码注入`,
-    `/shellfix log on/off        开关日志输出`,
-    `/shellfix doctor            环境诊断`,
-    `/shellfix git-line-ending   Git 换行符警告处理`,
-    `/shellfix help              本帮助`,
-    ``,
-    `/my                         模板系统`,
-    `/my ?                       列出所有模板`,
-    `/my ? <name>                预览模板内容`,
-    `/my <name> [args...]        执行模板（注入对话）`,
-    `/my save <name> <content>   保存模板`,
-    `/my rm <name>               删除模板`,
-    `/my show <name>             查看模板原始内容`,
-    `/my sync                    同步远程模板仓库`,
-    `/my sync --force            强制重新克隆`,
-    `/my sync --dry-run          预览同步`,
-    `/my sync status             查看同步状态`,
-    `/my sync-config             查看同步配置`,
-    `/my sync-config set <key> <val>  设置配置项`,
-    ``,
-    `/note                       笔记系统`,
-    `/note ?                     列出所有笔记标签`,
-    `/note ? <prefix>            浏览标签树`,
-    `/note #tag/key#             注入笔记内容`,
-    `/note #tag/key#:<content>   保存笔记`,
-    `/note #tag/key#:last        保存上一条（暂不支持，仅存显式）`,
-    `/note rm #tag/key#          删除笔记`,
-    ``,
-    `/auto                         注入系统`,
-    `/auto list                    列出模块启停状态`,
-    `/auto <module>                切换模块开关`,
-    `/auto mode prompt|auto|silent 设置自注入模式`,
-    `/auto require <文本>          注入当前任务目标`,
-    `/auto req_rm                  清除 require`,
-    `/auto show <module>           查看模块内容`,
-    `/auto reset                   恢复默认`,
-    `/auto conditions              查看所有模块的条件`,
-    `/auto conditions <module>     查看模块条件`,
-    `/auto conditions <module> add <pred> <expected>  添加条件`,
-    `/auto conditions <module> rm <index>    删除条件`,
-    `/auto conditions <module> toggle <index> 开关条件`,
-    `/auto conditions <module> clear         清除条件`,
-    `/auto conditions eval <module>          测试评估`,
-  ].join("\n");
 }
 
 // ====================================================================
@@ -1362,138 +954,6 @@ function handleMySyncConfig(args: string[]): string {
 }
 
 // ====================================================================
-// /note 命令处理
-// ====================================================================
-
-/** 解析 #tag/content# 格式 */
-const NOTE_SAVE_RE = /^#([^#]+)#:(.*)$/s;
-/** 解析纯标签 #tag# */
-const NOTE_TAG_RE = /^#([^#]+)#$/;
-
-function handleNoteCommand(args: string): string {
-  if (!args) {
-    return "笔记系统\n用法: /note ? 浏览 /note #tag# 注入";
-  }
-
-  const tokens = args.split(/\s+/);
-  const first = tokens[0];
-
-  // 查询模式
-  if (first === "?") {
-    const rest = tokens.slice(1).join(" ");
-    if (!rest) {
-      // 列出所有顶层标签
-      const tree = listTagTree();
-      if (tree.length === 0) return "暂无笔记。";
-      return "笔记标签：\n" + tree.map((t) => `  #${t.endsWith("/") ? t.slice(0, -1) : t}#`).join("\n");
-    }
-    // 列出子标签
-    const prefix = rest.endsWith("/") ? rest : rest;
-    const children = listTagTree(prefix);
-    if (children.length === 0) {
-      // 没有子标签，看看是不是直接匹配
-      const note = getNote(rest);
-      if (note) {
-        return `笔记 #${rest}#:\n${note.content}`;
-      }
-      return `标签 "${rest}" 下无内容。`;
-    }
-    return `${rest}/ 下的子标签：\n` +
-      children.map((c) => `  #${prefix}${c.endsWith("/") ? c.slice(0, -1) : c}#`).join("\n");
-  }
-
-  // timeline 时间线
-  if (first === "timeline") {
-    let tagFilter = "";
-    let limit = 20;
-    let since: string | undefined;
-    let i = 1;
-    const tlTokens = args.split(/\s+/);
-    while (i < tlTokens.length) {
-      const t = tlTokens[i];
-      if (t === "--limit") {
-        limit = parseInt(tlTokens[++i], 10) || 20;
-      } else if (t === "--since") {
-        const raw = tlTokens[++i];
-        if (raw) {
-          since = raw.length === 10 ? raw + "T00:00:00.000Z" : raw;
-        }
-      } else if (t.startsWith("#") && t.endsWith("#")) {
-        tagFilter = t.slice(1, -1);
-      }
-      i++;
-    }
-    const notes = tagFilter
-      ? queryNotesByTime(tagFilter, limit, since)
-      : listNotesByTime(limit, since);
-    if (notes.length === 0) return "暂无笔记。";
-    const lines: string[] = [`笔记时间线（显示 ${notes.length} 条）`, "─".repeat(40)];
-    for (const n of notes) {
-      const date = n.created.slice(0, 19).replace("T", " ");
-      lines.push(`[${date}] #${n.tag}#`);
-      lines.push(n.content.slice(0, 100));
-      lines.push("");
-    }
-    return lines.join("\n");
-  }
-
-  // rm 子命令
-  if (first === "rm") {
-    const tagMatch = args.match(NOTE_TAG_RE);
-    if (!tagMatch) return '用法: /note rm #tag#';
-    const tag = tagMatch[1];
-    if (removeNote(tag)) return `笔记 #${tag}# 已删除。`;
-    return `笔记 #${tag}# 不存在。`;
-  }
-
-  // 保存模式: /note #tag#:content
-  const saveMatch = args.match(NOTE_SAVE_RE);
-  if (saveMatch) {
-    const tag = saveMatch[1].trim();
-    let content = saveMatch[2].trim();
-    // 处理 :last 标记（暂存标识，实际内容为当前）
-    if (content === ":last") content = "(上一条消息内容)"; // 占位
-    saveNote(tag, content);
-    return `笔记 #${tag}# 已保存。`;
-  }
-
-  // 注入模式: /note #tag#
-  const tagMatch2 = args.match(NOTE_TAG_RE);
-  if (tagMatch2) {
-    const tag = tagMatch2[1];
-    const note = getNote(tag);
-    if (!note) {
-      // 尝试作为父标签浏览
-      const children = listTagTree(tag);
-      if (children.length > 0) {
-        return `${tag}/ 下的子标签：\n` +
-          children.map((c) => `  #${tag}/${c.endsWith("/") ? c.slice(0, -1) : c}#`).join("\n");
-      }
-      return `笔记 #${tag}# 不存在。用 /note ? 列出所有。`;
-    }
-    return note.content;
-  }
-
-  // 帮助
-  if (first === "help") {
-    return [
-      `笔记系统帮助\n`,
-      `/note ?             列出所有标签`,
-      `/note ? <prefix>    浏览标签树`,
-      `/note timeline      按时间线浏览笔记（最近 20 条）`,
-      `/note timeline --limit 50  最多 50 条`,
-      `/note timeline --since 2025-01-01  从指定日期开始`,
-      `/note timeline #tag#          按标签过滤`,
-      `/note #tag#:content  保存笔记`,
-      `/note #tag#          注入笔记`,
-      `/note rm #tag#       删除笔记`,
-    ].join("\n");
-  }
-
-  return '无法解析。格式: /note #tag#:content 或 /note #tag#';
-}
-
-// ====================================================================
 // 支柱四：注入系统（in）
 // ====================================================================
 
@@ -1789,152 +1249,9 @@ function handleInjectConditions(args: string[]): string {
     `/auto conditions ${modName} eval             测试评估`;
 }
 
-// ====================================================================
-// /kickme 命令处理
-// ====================================================================
 
-function handleKickmeCommand(args: string): string {
-  if (!args) {
-    const rules = getKickmeRules();
-    if (rules.length === 0) return "暂无 kickme 规则。\n用法: /kickme add <关键词> <标题> <消息>";
-    const lines: string[] = [];
-    lines.push(`Kickme 通知规则 (${rules.length} 条)`);
-    for (const rule of rules) {
-      const icon = rule.enabled ? "✅" : "⏸️";
-      lines.push(`  ${icon} ${rule.label} (${rule.id})`);
-      lines.push(`     → ${rule.title}`);
-    }
-    return lines.join("\n");
-  }
 
-  const tokens = args.split(/\s+/);
-  const first = tokens[0];
 
-  if (first === "add") {
-    const keyword = tokens[1];
-    const title = tokens[2] || keyword;
-    const message = tokens.slice(3).join(" ") || `触发关键词: ${keyword}`;
-    if (!keyword) return "用法: /kickme add <关键词> <标题> <消息>";
-    const id = addKickmeRule({
-      label: keyword,
-      enabled: true,
-      matchType: "keyword",
-      pattern: keyword,
-      title,
-      message,
-      sound: false,
-      scope: "both",
-    });
-    return `规则已添加: "${keyword}" (${id})`;
-  }
-
-  if (first === "rm") {
-    const id = tokens[1];
-    if (!id) return "用法: /kickme rm <id>";
-    if (removeKickmeRule(id)) return `规则已删除: ${id}`;
-    return `规则不存在: ${id}`;
-  }
-
-  if (first === "on") {
-    const id = tokens[1];
-    if (!id) return "用法: /kickme on <id>";
-    const rule = getKickmeRules().find((r) => r.id === id);
-    if (!rule) return `规则不存在: ${id}`;
-    if (!rule.enabled) toggleKickmeRule(id);
-    return `规则已开启: ${rule.label}`;
-  }
-
-  if (first === "off") {
-    const id = tokens[1];
-    if (!id) return "用法: /kickme off <id>";
-    const rule = getKickmeRules().find((r) => r.id === id);
-    if (!rule) return `规则不存在: ${id}`;
-    if (rule.enabled) toggleKickmeRule(id);
-    return `规则已关闭: ${rule.label}`;
-  }
-
-  if (first === "sound") {
-    const id = tokens[1];
-    const onOff = tokens[2];
-    if (!id || !onOff) return "用法: /kickme sound <id> on|off";
-    const ok = setKickmeSound(id, onOff === "on");
-    if (!ok) return `规则不存在: ${id}`;
-    return `提示音: ${onOff === "on" ? "ON" : "OFF"}`;
-  }
-
-  return "无法解析。用法: /kickme add|rm|on|off|sound";
-}
-
-function handleDynamicCommand(args: string): string {
-  if (!args) {
-    const rules = getDynamicRules();
-    if (rules.length === 0) return "暂无动态规则。\n用法: /dynamic add <触发词> <注入内容>";
-    const lines: string[] = [];
-    lines.push(`Dynamic 动态上下文注入规则 (${rules.length} 条)`);
-    for (const rule of rules) {
-      const icon = rule.enabled ? "✅" : "⏸️";
-      const cd = rule.cooldown > 0 ? `[CD:${rule.cooldown}s]` : "";
-      lines.push(`  ${icon}${cd} ${rule.trigger} (${rule.id})`);
-      lines.push(`     → ${(rule.context || "").slice(0, 60)}`);
-    }
-    return lines.join("\n");
-  }
-
-  const tokens = args.split(/\s+/);
-  const first = tokens[0];
-
-  if (first === "add") {
-    const trigger = tokens[1];
-    const context = tokens.slice(2).join(" ");
-    if (!trigger) return "用法: /dynamic add <触发词> <注入内容>";
-    const id = addDynamicRule({
-      trigger,
-      enabled: true,
-      matchType: "keyword",
-      context: context || `(当前对话涉及 ${trigger})`,
-      cooldown: 0,
-      lastTriggered: 0,
-    });
-    return `动态规则已添加: "${trigger}" (${id})`;
-  }
-
-  if (first === "rm") {
-    const id = tokens[1];
-    if (!id) return "用法: /dynamic rm <id>";
-    if (removeDynamicRule(id)) return `规则已删除: ${id}`;
-    return `规则不存在: ${id}`;
-  }
-
-  if (first === "on") {
-    const id = tokens[1];
-    if (!id) return "用法: /dynamic on <id>";
-    const rules = getDynamicRules();
-    const rule = rules.find((r) => r.id === id);
-    if (!rule) return `规则不存在: ${id}`;
-    if (!rule.enabled) toggleDynamicRule(id);
-    return `规则已开启: ${rule.trigger}`;
-  }
-
-  if (first === "off") {
-    const id = tokens[1];
-    if (!id) return "用法: /dynamic off <id>";
-    const rules = getDynamicRules();
-    const rule = rules.find((r) => r.id === id);
-    if (!rule) return `规则不存在: ${id}`;
-    if (rule.enabled) toggleDynamicRule(id);
-    return `规则已关闭: ${rule.trigger}`;
-  }
-
-  if (first === "cooldown") {
-    const id = tokens[1];
-    const seconds = parseInt(tokens[2], 10);
-    if (!id || Number.isNaN(seconds)) return "用法: /dynamic cooldown <id> <秒数>";
-    if (setDynamicCooldown(id, seconds)) return `冷却时间已设置: ${seconds}s`;
-    return `规则不存在: ${id}`;
-  }
-
-  return "无法解析。用法: /dynamic add|rm|on|off|cooldown";
-}
 
 function handleAutoRuleServer(args: string[]): string {
   if (args.length === 0) {

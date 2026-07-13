@@ -48,7 +48,7 @@ export interface CmdRules {
 /** @deprecated AutoState 已在 PluginState 中移除，由 autoRules/require/autoMode/moduleConditions 替代 */
 
 /** 当前插件版本号（单一事实来源） */
-export const PLUGIN_VERSION = "2.0.0";
+export const PLUGIN_VERSION = "2.2.2";
 
 export interface SyncConfig {
   repoUrl: string;
@@ -62,6 +62,7 @@ export interface PluginState {
   version: string;
   encoding: boolean;
   log: boolean;
+  showVersion: boolean;
   cmdRules: CmdRules;
   sync: SyncConfig;
   kickme: KickmeRule[];
@@ -133,6 +134,7 @@ const DEFAULT_STATE: PluginState = {
   version: "2.0.0",
   encoding: true,
   log: true,
+  showVersion: true,
   cmdRules: {
     export: true,
     which: false,
@@ -270,6 +272,14 @@ export function toggleLog(): boolean {
   s.log = !s.log;
   saveState(s);
   return s.log;
+}
+
+/** 切换启动版本信息显示 */
+export function toggleShowVersion(): boolean {
+  const s = loadState();
+  s.showVersion = !s.showVersion;
+  saveState(s);
+  return s.showVersion;
 }
 
 /** 设置自动化模块开关（重定向到 AutoRuleV2） */
