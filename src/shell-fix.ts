@@ -326,8 +326,8 @@ export const ShellFixPlugin: Plugin = async () => {
         result = applyChmodRule(result);
       }
 
-      // 编码前缀
-      if (s.encoding && !result.startsWith(ENCODING_PREFIX)) {
+      // 编码前缀 — 检测是否已有编码设置（ShellFix 格式或其他格式），避免重复注入
+      if (s.encoding && !result.startsWith(ENCODING_PREFIX) && !/^\s*(?:\$z=\[Text\.Encoding\]|\[Console\]::OutputEncoding\s*=|\[System\.Text\.UTF8Encoding\]|\$OutputEncoding\s*=)/i.test(result)) {
         result = `${ENCODING_PREFIX}${result}`;
       }
 
