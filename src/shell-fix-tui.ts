@@ -722,76 +722,34 @@ function showTemplateSystem(api: any): void {
     const all = (listTemplates() || []) as TemplateEntry[];
     const builtinCount = all.filter((t) => t.builtin).length;
     const userCount = all.length - builtinCount;
-    const enabledText = userCount > 0
-      ? `已保存 ${userCount} 个用户模板 + ${builtinCount} 个内置`
-      : `${builtinCount} 个内置模板可用`;
-
-    if (all.length === 0) {
-      api.ui.toast({ message: "暂无模板" });
-      return;
-    }
-
-    // 保护：确保每个模板有合法 name
-    const validTemplates = all.filter((t) => t && typeof t.name === "string" && t.name.length > 0);
-    if (validTemplates.length === 0) {
-      // DialogSelect 无合法选项 → 改为 DialogAlert 展示帮助
-      const lines = [
-        `模板系统 — 保存和执行预设文本模板`,
-        ``,
-        `内置模板 ${builtinCount} 个，但数据异常，无法渲染列表。`,
-        ``,
-        `用法：/my <模板名> [参数...]`,
-      ];
+    const lines: string[] = [
+      `模板系统 — 保存和执行预设文本模板`,
+      ``,
+      `内置: ${builtinCount} 个 | 用户: ${userCount} 个`,
+      ``,
+      ...all.slice(0, 20).map((t) => `  ${t.name}${t.builtin ? "" : " *"}  ${(t.description || "").slice(0, 40)}`),
+      userCount > 0 ? `` : ``,
+      userCount > 0 ? `  * 用户自定义` : ``,
+      ``,
+      `用法（斜杠命令，通过 LLM 执行）：`,
+      `  /my ?              浏览所有模板`,
+      `  /my <模板名> [参数]  执行模板`,
+      `  /my edit <模板名>   编辑模板`,
+      `  /my save <模板名>   保存新模板`,
+      `  /my rm <模板名>     删除模板`,
+    ];
+    if (all.length > 0) {
       api.ui.dialog?.replace?.(() =>
         api.ui.DialogAlert({
-          title: "ShellFix my 模板系统",
+          title: `ShellFix my 模板系统`,
           message: lines.join("\n"),
         })
       );
-      return;
+    } else {
+      api.ui.toast({ message: "暂无模板" });
     }
-
-    const options: any[] = [
-      { label: "使用说明", value: "__help__", description: "示例和用法" },
-    ];
-    for (const t of validTemplates) {
-      options.push({ label: t.name, value: t.name, description: (t.description || "").slice(0, 60) });
-    }
-    options.push(
-      { label: "编辑模板", value: "__edit__", description: `修改已保存的模板内容` },
-      { label: "查看全部", value: "__list__", description: "完整模板列表" },
-    );
-
-    api.ui.dialog?.replace?.(() =>
-      api.ui.DialogSelect({
-        title: `模板系统 — ${enabledText}`,
-        options,
-        onSelect: (name: string) => {
-          try {
-            if (name === "__help__") return showTemplateHelp(api, validTemplates);
-            if (name === "__edit__") return showTemplateEditor(api, validTemplates);
-            if (name === "__list__") return showTemplateList(api);
-            showTemplateRender(api, name);
-          } catch (e) {
-            console.error(`[ShellFix] template onSelect error:`, e);
-            api.ui.toast({ message: "模板操作异常" });
-            api.ui.dialog?.clear?.();
-          }
-        },
-        onCancel: () => api.ui.dialog?.clear?.(),
-      })
-    );
   } catch (e) {
     console.error(`[ShellFix] showTemplateSystem error:`, e);
-    // 兜底：DialogSelect 渲染崩溃 → 纯文字 DialogAlert
-    try {
-      api.ui.dialog?.replace?.(() =>
-        api.ui.DialogAlert({
-          title: "ShellFix my 模板系统",
-          message: `模板系统异常，请尝试使用斜杠命令：\n\n/my ?   浏览模板\n/my <name> [args...]  执行模板\n/my edit <name>  编辑模板`,
-        })
-      );
-    } catch { /* 完全静默 */ }
   }
 }
 
@@ -946,36 +904,28 @@ function showAutoSystem(api: any): void {
     api.ui.dialog?.clear?.();
     const s = loadState() || {} as any;
     const enabled = getEnabledAutoModules();
-    const onCount = enabled.length;
-    const options: any[] = [
-      { label: "使用说明", value: "__help__", description: "自动注入示例和模式" },
-      { label: "模式设置", value: "__mode__", description: `当前: ${s.autoMode}` },
-      { label: "查看全部", value: "__list__", description: "完整模块列表" },
+    const lines: string[] = [
+      `自动化系统 — 自动注入上下文到 System Prompt`,
+      ``,
+      `模式: ${s.autoMode}`,
+      `已开启 ${enabled.length}/${AUTO_MODULES.length} 个模块`,
+      ``,
+      ...AUTO_MODULES.map((mod) => {
+        const on = enabled.includes(mod.name) ? "✅" : "  ";
+        return `  ${on} ${mod.label.padEnd(10)} ${mod.description}`;
+      }),
+      ``,
+      `用法（斜杠命令，通过 LLM 执行）：`,
+      `  /auto list             列出模块状态`,
+      `  /auto <模块名>          开关模块`,
+      `  /auto mode prompt|auto|silent  设置模式`,
+      `  /auto require <文本>    注入任务目标`,
+      `  /auto conditions        条件管理`,
     ];
-    for (const mod of AUTO_MODULES) {
-      options.push({
-        label: `${enabled.includes(mod.name) ? "ON " : "OFF"} ${mod.label}`,
-        value: mod.name,
-        description: `${mod.description}`,
-      });
-    }
     api.ui.dialog?.replace?.(() =>
-      api.ui.DialogSelect({
-        title: `自动化系统 — ${onCount}/${AUTO_MODULES.length} 模块开启`,
-        options,
-        onSelect: (value: string) => {
-          try {
-            if (value === "__help__") return showAutoHelp(api);
-            if (value === "__mode__") return showAutoModeSelector(api);
-            if (value === "__list__") return showAutoModuleList(api);
-            setAutoModule(value, !enabled.includes(value));
-            api.ui.toast({ message: `${getAutoModule(value)?.label || value}: ${enabled.includes(value) ? "OFF" : "ON"}` });
-          } catch (e) {
-            console.error(`[ShellFix] autoSystem onSelect error:`, e);
-          }
-          api.ui.dialog?.clear?.();
-        },
-        onCancel: () => api.ui.dialog?.clear?.(),
+      api.ui.DialogAlert({
+        title: `ShellFix auto 自动注入上下文`,
+        message: lines.join("\n"),
       })
     );
   } catch (e) {
@@ -1241,39 +1191,23 @@ function showCmdRules(api: any): void {
 function showGitLineEnding(api: any): void {
   try {
     const s = loadState() || {} as any;
+    const currentMode = s.gitLineEnding === "auto" ? "AUTO" : s.gitLineEnding === "config" ? "CONFIG" : "OFF";
+    const lines: string[] = [
+      `Git 换行符警告处理 — 静默 git diff/add 的换行符噪音`,
+      ``,
+      `当前: ${currentMode}`,
+      ``,
+      `  auto    环境变量注入，仅 OpenCode 进程内生效（推荐）`,
+      `  config  生成 git config 命令供全局执行`,
+      `  off     关闭，不处理换行符警告`,
+      ``,
+      `用法（斜杠命令，通过 LLM 执行）：`,
+      `  /shellfix git-line-ending auto|config|off`,
+    ];
     api.ui.dialog?.replace?.(() =>
-      api.ui.DialogSelect({
-        title: "Git 换行符警告处理",
-        options: [
-          { label: `${s.gitLineEnding === "auto" ? "ON " : "   "} auto — 环境变量注入`, value: "auto", description: "仅 OpenCode 进程内生效（推荐）" },
-          { label: `${s.gitLineEnding === "config" ? "ON " : "   "} config — 全局 Git 配置`, value: "config", description: "生成 git config 命令供执行" },
-          { label: `${s.gitLineEnding === "off" ? "ON " : "   "} off — 关闭`, value: "off", description: "不处理换行符警告" },
-        ],
-        onSelect: (value: string) => {
-          try {
-            const s2 = loadState();
-            s2.gitLineEnding = value as "auto" | "config" | "off";
-            saveState(s2);
-            if (value === "config") {
-              api.ui.dialog?.replace?.(() =>
-                api.ui.DialogAlert({
-                  title: "Git 换行符 — 全局配置",
-                  message: "请在终端执行以下命令（或发送给 Agent 执行）：\n\n"
-                    + "git config --global core.autocrlf false\n"
-                    + "git config --global core.safecrlf false\n\n"
-                    + "已切换为 CONFIG 模式。",
-                })
-              );
-            } else {
-              api.ui.toast({ message: `Git 换行符处理: ${value === "auto" ? "AUTO ON" : value === "config" ? "CONFIG" : "OFF"}` });
-              api.ui.dialog?.clear?.();
-            }
-          } catch (e) {
-            console.error(`[ShellFix] gitEol onSelect error:`, e);
-            api.ui.dialog?.clear?.();
-          }
-        },
-        onCancel: () => api.ui.dialog?.clear?.(),
+      api.ui.DialogAlert({
+        title: "ShellFix git-eol 换行符警告处理",
+        message: lines.join("\n"),
       })
     );
   } catch (e) {
