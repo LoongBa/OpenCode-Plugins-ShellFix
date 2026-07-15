@@ -226,6 +226,10 @@ const TOUCH_RE = /^\s*touch\s+(.+)$/;
 const RM_RE = /^\s*rm\s+(.+)$/;
 const CHMOD_RE = /^\s*chmod\s+/;
 
+/** 仅匹配管道后的 head/tail，避免误伤文件路径或变量名 */
+const HEAD_RE = /(\|\s*)head(?:\s+(?:-n\s*)?(\d+))?/;
+const TAIL_RE = /(\|\s*)tail(?:\s+(?!-f\b)(?:-n\s*)?(\d+))?/;
+
 // ====================================================================
 // 插件主入口
 // ====================================================================
@@ -324,6 +328,12 @@ export const ShellFixPlugin: Plugin = async () => {
       }
       if (s.cmdRules.chmod) {
         result = applyChmodRule(result);
+      }
+      if (s.cmdRules.head) {
+        result = applyHeadRule(result);
+      }
+      if (s.cmdRules.tail) {
+        result = applyTailRule(result);
       }
 
       // 编码前缀 — 检测是否已有编码设置（ShellFix 格式或其他格式），避免重复注入
@@ -507,6 +517,20 @@ function applyRmRule(cmd: string): string {
 
 function applyChmodRule(cmd: string): string {
   return cmd.replace(CHMOD_RE, "# chmod ignored on Windows; ");
+}
+
+function applyHeadRule(cmd: string): string {
+  return cmd.replace(HEAD_RE, (_m, pipePrefix, num) => {
+    const n = num ? parseInt(num, 10) : 10;
+    return `${pipePrefix}Select-Object -First ${n}`;
+  });
+}
+
+function applyTailRule(cmd: string): string {
+  return cmd.replace(TAIL_RE, (_m, pipePrefix, num) => {
+    const n = num ? parseInt(num, 10) : 10;
+    return `${pipePrefix}Select-Object -Last ${n}`;
+  });
 }
 
 // ====================================================================
