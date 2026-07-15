@@ -87,6 +87,9 @@ import {
   removeAutoRule,
   toggleAutoRule,
   type AutoRuleV2,
+  addCmdError,
+  getCmdErrors,
+  type CmdErrorEntry,
 } from "./lib/state";
 
 import {
@@ -413,6 +416,14 @@ export const ShellFixPlugin: Plugin = async () => {
 
       const separator = "\n\n---\n";
       out.content = out.content + separator + chunks.join("\n\n");
+
+      // 命令错误提醒：Agent 多次执行了不存在的命令时，提示改用 PowerShell 等效命令
+      const cmdErrors = getCmdErrors();
+      const frequentErrors = cmdErrors.filter((e) => e.count >= 2);
+      if (frequentErrors.length > 0) {
+        const hints = frequentErrors.map((e) => `\`${e.cmd}\` (${e.count} 次)`).join("、");
+        out.content += `\n\n[ShellFix] 注意：以下命令在 PowerShell 中不存在，请使用等效命令：${hints}。`;
+      }
 
       // prompt 模式：追加提示引导
       if (s.autoMode === "prompt") {

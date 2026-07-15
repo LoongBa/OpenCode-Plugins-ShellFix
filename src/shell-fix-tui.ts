@@ -88,6 +88,10 @@ import {
   removeAutoRule,
   toggleAutoRule,
   type AutoRuleV2,
+  getCmdErrors,
+  clearCmdErrors,
+  markCmdErrorNotified,
+  type CmdErrorEntry,
 } from "./lib/state";
 
 import {
@@ -607,6 +611,15 @@ const tui: TuiPlugin = async (api, _options, _meta) => {
         namespace: "palette",
         run() {
           try { showShellFixHelp(api); } catch (e) { console.error(`[ShellFix] palette error (shellfix.help):`, e); }
+        },
+      },
+      {
+        name: "shellfix.cmd-errors",
+        title: "ShellFix cmd-errors 命令错误日志",
+        category: SHELLFIX_CATEGORY,
+        namespace: "palette",
+        run() {
+          try { showCmdErrors(api); } catch (e) { console.error(`[ShellFix] palette error (shellfix.cmd-errors):`, e); }
         },
       },
 
@@ -1342,6 +1355,7 @@ function showShellFixHelp(api: any): void {
     `shellfix.my        my 预设文本模板`,
     `shellfix.note      note 笔记标签`,
     `shellfix.auto      auto 自动注入上下文`,
+    `shellfix.cmd-errors cmd-errors 命令错误日志`,
     ``,
     `所有命令通过 Ctrl+P 访问。`,
   ];
@@ -1351,6 +1365,43 @@ function showShellFixHelp(api: any): void {
       message: lines.join("\n"),
     })
   );
+}
+
+/** 命令错误日志 — 查看 Agent 误用的非 PowerShell 命令 */
+function showCmdErrors(api: any): void {
+  try {
+    const errors = getCmdErrors();
+    if (errors.length === 0) {
+      api.ui.toast({ message: "暂无命令错误记录" });
+      return;
+    }
+    const lines: string[] = [
+      `命令错误日志 — Agent 使用了不存在的 PowerShell 命令`,
+      `共 ${errors.length} 个不同命令`,
+      ``,
+      ...errors.map((e) => {
+        const icon = e.notified ? " " : "●";
+        return `  ${icon} ${e.cmd.padEnd(16)} ${e.count} 次  ${e.lastSeen.slice(0, 10)}`;
+      }),
+      ``,
+      `标记 ● = 尚未添加规则/提醒`,
+      `ShellFix 会自动在 system prompt 中提醒 Agent 避免重复错误。`,
+      `用 /shellfix bash 面板可开启对应命令替换规则。`,
+    ];
+    api.ui.dialog?.replace?.(() =>
+      api.ui.DialogAlert({
+        title: "ShellFix cmd-errors 命令错误",
+        message: lines.join("\n"),
+        onConfirm: () => { clearCmdErrors(); api.ui.toast({ message: "日志已清除" }); },
+      })
+    );
+    // 标记所有已查看
+    for (const e of errors) {
+      if (!e.notified) markCmdErrorNotified(e.cmd);
+    }
+  } catch (e) {
+    console.error(`[ShellFix] showCmdErrors error:`, e);
+  }
 }
 
 const plugin: TuiPluginModule & { id: string } = {

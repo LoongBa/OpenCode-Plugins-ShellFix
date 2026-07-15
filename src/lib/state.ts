@@ -75,6 +75,15 @@ export interface PluginState {
   moduleConditions: Record<string, InjectCondition[]>;
   pendingDynamic: string[];
   gitLineEnding: "auto" | "config" | "off";
+  cmdErrors: CmdErrorEntry[];
+}
+
+export interface CmdErrorEntry {
+  cmd: string;
+  count: number;
+  firstSeen: string;
+  lastSeen: string;
+  notified: boolean;
 }
 
 export interface KickmeRule {
@@ -164,6 +173,7 @@ const DEFAULT_STATE: PluginState = {
   autoRules: [],
   pendingDynamic: [],
   gitLineEnding: "auto",
+  cmdErrors: [],
 };
 
 // ====================================================================
@@ -610,6 +620,43 @@ export function syncModuleToAutoRule(moduleName: string, enabled: boolean): void
       priority: 50,
     });
   }
+  saveState(s);
+}
+
+// ====================================================================
+// CmdError 命令错误追踪
+// ====================================================================
+
+/** 记录一条命令执行失败的日志，去重计次 */
+export function addCmdError(cmd: string): void {
+  const s = loadState();
+  const existing = s.cmdErrors.find((e) => e.cmd === cmd);
+  const now = new Date().toISOString();
+  if (existing) {
+    existing.count++;
+    existing.lastSeen = now;
+  } else {
+    s.cmdErrors.push({ cmd, count: 1, firstSeen: now, lastSeen: now, notified: false });
+  }
+  saveState(s);
+}
+
+/** 获取所有命令错误日志 */
+export function getCmdErrors(): CmdErrorEntry[] {
+  return [...loadState().cmdErrors];
+}
+
+/** 标记某条错误已通知用户 */
+export function markCmdErrorNotified(cmd: string): void {
+  const s = loadState();
+  const entry = s.cmdErrors.find((e) => e.cmd === cmd);
+  if (entry) { entry.notified = true; saveState(s); }
+}
+
+/** 清除所有命令错误日志 */
+export function clearCmdErrors(): void {
+  const s = loadState();
+  s.cmdErrors = [];
   saveState(s);
 }
 
