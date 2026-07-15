@@ -1,7 +1,7 @@
-# v2.2 开发方案 — 命令体系精简 + Palette 配置面板
+# v2.2 开发方案 — 命令体系精简 + Palette 配置面板 + 命令错误追踪
 
-> 当前版本：v2.1.1 → 目标版本：v2.2.1
-> 审核日期：2026-07-13
+> 当前版本：v2.2.7
+> 审核日期：2026-07-16
 
 ---
 
@@ -71,24 +71,31 @@
 
 **入口**：Ctrl+P → 每个配置项独立可见，搜索 `shellfix` 即可过滤。
 
-**实现**：9 条独立 `TuiCommand`，各有一条 `name` + `title`，点击直接执行，无需子菜单。
+**实现**：14 条独立 `TuiCommand`，各有一条 `name` + `title` + `namespace: "palette"`，点击直接执行。
 
-**Palette 列表**（所有命令共用一个 `category` 分组标题 `ShellFix v2.2.1`，黄色显示）：
+**Palette 列表**（所有命令共用一个 `category` 分组标题 `ShellFix v${PLUGIN_VERSION}`，黄色显示）：
 
 | 名称 | 标题 | 行为 |
 |------|------|------|
-| `shellfix` | `ShellFix 📊 状态总览` | DialogAlert 展示所有开关状态 |
-| `shellfix.encoding` | `ShellFix 🔤 编码注入` | 直接 toggle + toast |
-| `shellfix.cmdrules` | `ShellFix 📝 命令规则` | DialogSelect 列出 6 条规则，点击切换 |
-| `shellfix.log` | `ShellFix 📋 日志` | 直接 toggle + toast |
-| `shellfix.gitlineending` | `ShellFix 🔧 Git 换行符` | DialogSelect 三选一 (auto/config/off) |
-| `shellfix.doctor` | `ShellFix 🏥 环境诊断` | DialogAlert 展示 OS/版本/架构 + Shell 版本 |
-| `shellfix.about` | `ShellFix ℹ️ 关于、检测更新` | DialogAlert + fetch GitHub API 检测更新 |
-| `shellfix.help` | `ShellFix ❓ 帮助` | DialogAlert 展示所有 palette 命令 |
-| `shellfix.my` | `ShellFix my — 模板系统` | 模板系统交互 |
-| `shellfix.auto` | `ShellFix auto — 自动化系统` | 自动化系统交互 |
+| `shellfix` | `ShellFix status 状态总览` | DialogAlert 展示所有开关状态 |
+| `shellfix.encoding` | `ShellFix encoding 中文不乱码` | DialogAlert 显示状态，确认后开关 |
+| `shellfix.bash` | `ShellFix bash 适配 Powershell 避免出错` | DialogSelect 列出命令规则，点击切换 |
+| `shellfix.log` | `ShellFix log 记录操作信息` | DialogAlert 显示状态，确认后开关 |
+| `shellfix.git-env` | `ShellFix git-env 避免等待交互` | DialogAlert 展示 16 个已注入的环境变量 |
+| `shellfix.git-eol` | `ShellFix git-eol 避免换行警告` | DialogAlert 展示当前模式 + 切换方法 |
+| `shellfix.kickme` | `ShellFix kickme 关键词通知` | DialogAlert 展示规则数 + 用法 |
+| `shellfix.banner` | `ShellFix banner 启动版本信息` | DialogAlert 显示状态，确认后开关 |
+| `shellfix.sysinfo` | `ShellFix sysinfo 查看系统信息` | DialogAlert 展示 OS/版本/架构 + Shell 版本 |
+| `shellfix.about` | `ShellFix about 版本与更新` | DialogAlert + 异步 GitHub API 检测更新 |
+| `shellfix.help` | `ShellFix help 命令参考` | DialogAlert 展示所有 palette 命令 |
+| `shellfix.my` | `ShellFix my 预设文本模板` | DialogAlert 展示模板列表 + `/my` 用法 |
+| `shellfix.note` | `ShellFix note 笔记标签` | DialogAlert 展示笔记数 + `/note` 用法 |
+| `shellfix.auto` | `ShellFix auto 自动注入上下文` | DialogAlert 展示模块状态 + `/auto` 用法 |
+| `shellfix.cmd-errors` | `ShellFix cmd-errors 命令错误日志` | DialogAlert 展示失败命令列表 + 清除功能 |
 
-> 原则：**版本号显示在 palette 黄色分组标题上**（如 `ShellFix v2.2.1`），每个 palette 条目标题不显示版本号。
+> 原则：**版本号显示在 palette 黄色分组标题上**（如 `ShellFix v2.2.7`），每个 palette 条目标题不显示版本号。
+> 原则：**无 emoji**，命令名用英文，简介用中文一目了然。
+> 注意：`DialogSelect` 因 OpenCode TUI 内部渲染崩溃 bug，`my`/`auto`/`git-eol` 三个入口已改用 `DialogAlert`，交互操作通过斜杠命令。
 
 ### 3.2 移除的死代码
 
@@ -125,34 +132,136 @@
 
 **修复方式**：所有 palette `run()` 函数中 `loadState()` 加 `|| {} as any` 兜底，`listTemplates()` 加 `|| []` 兜底。
 
-### 3.4 Palette 标题命名规范
+### 3.4 命令错误追踪 (cmd-errors) — v2.2.7
+
+**问题**：Agent 在 PowerShell 环境执行 Linux 命令（如 `NoWarn`、`head` 等），报错 `无法将"XXX"项识别为 cmdlet`，浪费 Token 且降低回答质量。
+
+**方案**：三层次防御体系
+
+#### 第一层：被动追踪（跨会话持久化）
+
+- `PluginState.cmdErrors: CmdErrorEntry[]` 记录所有识别到的失败命令
+- 每条记录含命令名、失败次数、首次/末次时间、是否已通知
+- 通过 `addCmdError(cmd)` API 由各检测点调用
+
+#### 第二层：主动提醒（system prompt 注入）
+
+- `experimental.chat.system.transform` 钩子检查 `cmdErrors`
+- 失败 ≥2 次的命令自动注入提醒：
+  ```
+  [ShellFix] 注意：以下命令在 PowerShell 中不存在，请使用等效命令：`NoWarn` (3 次)、`head` (2 次)。
+  ```
+
+#### 第三层：用户可见面板
+
+- `shellfix.cmd-errors` palette 入口显示错误日志（命令名、次数、末次时间）
+- 未通知的标记 `●`，查看后自动标记为已通知
+- 点击确认可清除所有日志
+
+#### 检测点（未来扩展）
+
+| 检测点 | 方式 | 状态 |
+|--------|------|------|
+| `tool.execute.before` 主动检测 | 正则匹配可疑裸词 | 待完善 |
+| `chat.message` 扫描错误消息 | 扫描用户消息中"无法将"模式 | 待实现 |
+| 用户手动报告 | 通过 `/shellfix log-error` | 待实现 |
+
+### 3.5 命令替换规则扩展 — v2.2.6
+
+新增 `head` / `tail` 两条命令替换规则：
+
+| 规则 | 匹配 | 替换 | 安全策略 |
+|------|------|------|---------|
+| `head` | `\| head [-n] N` | `\| Select-Object -First N` | 仅管道后匹配，默认 N=10 |
+| `tail` | `\| tail [-n] N` | `\| Select-Object -Last N` | 仅管道后匹配，跳过 `tail -f`，默认 N=10 |
+
+### 3.6 编码前缀重复检测 — v2.2.5
+
+**问题**：ShellFix 注入编码前缀时，如果模板内容或脚本本身已含编码设置，会出现重复注入。
+
+**修复**：注入前同时检测 4 种常见编码格式：
+
+| 格式 | 示例 |
+|------|------|
+| ShellFix 格式 | `$z=[Text.Encoding]::UTF8;...` |
+| 控制台编码 | `[Console]::OutputEncoding = ...` |
+| PS7 格式 | `[System.Text.UTF8Encoding]::new($false)` |
+| 环境变量 | `$OutputEncoding = ...` |
+
+### 3.7 Palette 异常安全加固 — v2.2.3/2.2.4
+
+**问题**：OpenCode TUI 的 `DialogSelect` 组件内部渲染存在崩溃 bug（`e.length` 在 `chunk-*.js` 中），导致 `shellfix.my`、`shellfix.auto`、`shellfix.git-eol` 三个入口崩溃。
+
+**修复**：
+
+| 版本 | 修复 |
+|------|------|
+| v2.2.3 | 所有 14 个 palette 入口的 `run()` 及回调函数加 try-catch（42 处） |
+| v2.2.4 | 三个崩溃入口从 `DialogSelect` 改为 `DialogAlert` 纯文字展示，交互操作通过斜杠命令 |
+
+### 3.8 Palette 标题命名规范
 
 每个 palette 命令的 `title` 字段以 `ShellFix` 前缀开头，方便在 Ctrl+P 列表中快速区分。
 
-**版本号统一放在 palette 分组标题上**：所有 ShellFix 命令使用同一个 `category` 值 `ShellFix v2.2.1`，Ctrl+P 中会显示一个黄色的 `ShellFix v2.2.1` 分组，其下是所有子命令。
+**版本号统一放在 palette 分组标题上**：所有 ShellFix 命令使用同一个 `category` 值 `ShellFix v${PLUGIN_VERSION}`，Ctrl+P 中会显示一个黄色的 `ShellFix v2.2.7` 分组，其下是所有子命令。
+
+**命名格式**：`ShellFix [英文命令名] [中文简介]`，无 emoji。
 
 | name | title | category |
 |------|-------|----------|
-| `shellfix` | `ShellFix 📊 状态总览` | `ShellFix v2.2.1` |
-| `shellfix.encoding` | `ShellFix 🔤 编码注入` | `ShellFix v2.2.1` |
-| `shellfix.cmdrules` | `ShellFix 📝 命令规则` | `ShellFix v2.2.1` |
-| `shellfix.log` | `ShellFix 📋 日志` | `ShellFix v2.2.1` |
-| `shellfix.gitlineending` | `ShellFix 🔧 Git 换行符` | `ShellFix v2.2.1` |
-| `shellfix.doctor` | `ShellFix 🏥 环境诊断` | `ShellFix v2.2.1` |
-| `shellfix.about` | `ShellFix ℹ️ 关于、检测更新` | `ShellFix v2.2.1` |
-| `shellfix.help` | `ShellFix ❓ 帮助` | `ShellFix v2.2.1` |
-| `shellfix.my` | `ShellFix my — 模板系统` | `ShellFix v2.2.1` |
-| `shellfix.auto` | `ShellFix auto — 自动化系统` | `ShellFix v2.2.1` |
+| `shellfix` | `ShellFix status 状态总览` | `ShellFix v2.2.7` |
+| `shellfix.encoding` | `ShellFix encoding 中文不乱码` | `ShellFix v2.2.7` |
+| `shellfix.bash` | `ShellFix bash 适配 Powershell 避免出错` | `ShellFix v2.2.7` |
+| `shellfix.log` | `ShellFix log 记录操作信息` | `ShellFix v2.2.7` |
+| `shellfix.git-env` | `ShellFix git-env 避免等待交互` | `ShellFix v2.2.7` |
+| `shellfix.git-eol` | `ShellFix git-eol 避免换行警告` | `ShellFix v2.2.7` |
+| `shellfix.kickme` | `ShellFix kickme 关键词通知` | `ShellFix v2.2.7` |
+| `shellfix.banner` | `ShellFix banner 启动版本信息` | `ShellFix v2.2.7` |
+| `shellfix.sysinfo` | `ShellFix sysinfo 查看系统信息` | `ShellFix v2.2.7` |
+| `shellfix.about` | `ShellFix about 版本与更新` | `ShellFix v2.2.7` |
+| `shellfix.help` | `ShellFix help 命令参考` | `ShellFix v2.2.7` |
+| `shellfix.my` | `ShellFix my 预设文本模板` | `ShellFix v2.2.7` |
+| `shellfix.note` | `ShellFix note 笔记标签` | `ShellFix v2.2.7` |
+| `shellfix.auto` | `ShellFix auto 自动注入上下文` | `ShellFix v2.2.7` |
+| `shellfix.cmd-errors` | `ShellFix cmd-errors 命令错误日志` | `ShellFix v2.2.7` |
 
 ---
 
 ## 四、交付清单
 
-- [x] `src/shell-fix-tui.ts` — 单面板 → 8 条独立 palette 子命令 + about（含 GitHub 检测更新）+ 移除死代码 + crash 修复
+### v2.2.2 基础
+- [x] `src/shell-fix-tui.ts` — 14 条独立 palette 子命令 + about（含 GitHub 检测更新）+ 无 emoji + 英文命名
 - [x] `src/shell-fix.ts` — 简化命令匹配，移除已删除命令的 handler
-- [x] `src/lib/state.ts` — 版本号 v2.1.1 → v2.2.1
+- [x] `src/lib/state.ts` — 版本号 v2.2.2，所有状态字段
 - [x] `deploy.ps1` — 新增 lib/ 目录部署，动态读取版本号
-- [x] `CHANGELOG.md` — v2.2.0 / v2.2.1 变更记录
+- [x] `CHANGELOG.md` — v2.2.2 变更记录
 - [x] `README.md` — 版本号更新
 - [x] 部署到 `~/.config/opencode/plugins/`（含 lib/ 目录）
-- [x] 最终验证 — palette 正常显示，about 可检测更新
+
+### v2.2.3 异常安全
+- [x] About 信息更新（作者：爱学习的龙爸 + 主页）
+- [x] 所有 14 个 palette 入口 `run()` 及回调加 try-catch（42 处）
+- [x] `showTemplateSystem/Editor/Help/Render` 全面保护
+- [x] `showToggleInfo/CmdRules/GitLineEnding` 回调保护
+- [x] `showAutoSystem/Help/ModeSelector` 回调保护
+
+### v2.2.4 DialogSelect 崩溃修复
+- [x] `shellfix.my` 从 DialogSelect 改为 DialogAlert
+- [x] `shellfix.auto` 从 DialogSelect 改为 DialogAlert
+- [x] `shellfix.git-eol` 从 DialogSelect 改为 DialogAlert
+
+### v2.2.5 编码前缀重复检测
+- [x] 检测 4 种常见编码格式，避免重复注入
+- [x] 兼容 ShellFix 格式 / 控制台编码 / PS7 格式 / 环境变量格式
+
+### v2.2.6 命令规则扩展
+- [x] `head` 规则：`| head [-n] N` → `| Select-Object -First N`
+- [x] `tail` 规则：`| tail [-n] N` → `| Select-Object -Last N`（跳过 `tail -f`）
+- [x] 仅管道后匹配，默认 N=10，零误伤风险
+
+### v2.2.7 命令错误追踪
+- [x] `PluginState.cmdErrors` 持久化存储
+- [x] `addCmdError/getCmdErrors/clearCmdErrors/markCmdErrorNotified` API
+- [x] `experimental.chat.system.transform` 自动注入 ≥2 次失败命令提醒
+- [x] `shellfix.cmd-errors` palette 入口：日志查看 + 清除
+- [x] 文档更新：开发方案、设计文档
