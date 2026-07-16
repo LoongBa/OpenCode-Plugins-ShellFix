@@ -1,5 +1,24 @@
 # Changelog
 
+## v2.2.9 (2026-07-17)
+
+### 新功能 — PwshCheck：PowerShell 版本检测引导
+
+- **启动检测**：插件加载时检测 `opencode.jsonc` 是否含 `"shell": "...pwsh..."`
+  - 已配置 → 静默跳过，标记 `dismissed = "accepted"`
+  - 未配置但系统有 pwsh → 标记 `pending = true`
+- **Agent 注入**：首轮用户消息通过 `system.transform` 注入交互协议
+  - Agent 询问用户：改（编辑 opencode.jsonc）/ 以后再说 / 不再提醒
+- **持久化**：`PluginState.pwshCheck` 字段，Agent 通过修改 `shellfix-state.json` 回传结果
+
+### 修复
+
+- **编码前缀不能跳过**：之前 `shellIsPwsh` 完全跳过编码前缀，但 `[Console]::OutputEncoding` 在中文 Windows 上默认 GB2312（CP936），导致 `Select-String` 等命令输出乱码
+  - 移除了所有 `!shellIsPwsh` 守卫，始终注入完整前缀
+  - 清理了 `shellIsPwsh` 死代码变量
+- **readdirSync 导入缺失**：review 发现 `fileExists()` 函数使用了未导入的 `readdirSync`（之前 `shellIsPwsh` IIFE 引入后覆盖了 review 前版本的导入），补回
+- **`"accepted" as any` 移除**：类型 `PwshCheckState.dismissed` 已包含 `"accepted"` 成员，无需类型绕过
+
 ## v2.2.8 (2026-07-16)
 
 ### 新功能 — 安全提醒层 + 编码前缀优化

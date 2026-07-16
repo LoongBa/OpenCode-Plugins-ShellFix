@@ -62,7 +62,7 @@ export interface SyncConfig {
 
 export interface PwshCheckState {
   pending: boolean;
-  dismissed: "pending" | "dismissed" | "forever";
+  dismissed: "pending" | "dismissed" | "forever" | "accepted";
 }
 
 export interface PluginState {

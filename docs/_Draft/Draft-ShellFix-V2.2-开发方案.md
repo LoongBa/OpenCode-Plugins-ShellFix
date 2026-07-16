@@ -371,11 +371,21 @@ PluginState.pwshCheck: PwshCheckState;
 
 **不增加 palette 入口**：此为一次性引导，无需面板管理。
 
+#### 修正
+
+**发现**：`[Console]::OutputEncoding` 在中文 Windows 上默认是 GB2312（CP936），即使 pwsh 7 也不例外。之前 `shellIsPwsh` 完全跳过编码前缀导致 `Select-String` 等命令输出乱码。
+
+**修正**：移除 `!shellIsPwsh` 守卫，始终注入完整编码前缀 `$OutputEncoding=[Console]::OutputEncoding=[Text.Encoding]::UTF8;`。pwsh 7 下设置 `$OutputEncoding` 为 UTF-8 是幂等的（已默认 UTF-8），无副作用。
+
+**清理**：`shellIsPwsh` 变量成死代码，已移除。
+
 #### 交付清单
 
-- [ ] `src/lib/state.ts` — `PwshCheckState` 接口 + `PluginState.pwshCheck` 字段 + `DEFAULT_STATE` 默认值 + `setPwshCheckDismissed()` API
-- [ ] `src/shell-fix.ts` — 插件启动时检测 `opencode.jsonc` 是否含 `"shell": "...pwsh..."`
-- [ ] `src/shell-fix.ts` — `experimental.chat.system.transform` 注入 Agent 交互协议
-- [ ] 首次消费后 `pending = false`，避免重复注入
-- [ ] Agent 通过修改 `shellfix-state.json` 回传选择结果
-- [ ] 文档更新：CHANGELOG + 开发方案
+- [x] `src/lib/state.ts` — `PwshCheckState` 接口 + `PluginState.pwshCheck` 字段 + `DEFAULT_STATE` 默认值 + `setPwshCheckDismissed()` API
+- [x] `src/shell-fix.ts` — 插件启动时检测 `opencode.jsonc` 是否含 `"shell": "...pwsh..."`
+- [x] `src/shell-fix.ts` — `experimental.chat.system.transform` 注入 Agent 交互协议
+- [x] 首次消费后 `pending = false`，避免重复注入
+- [x] Agent 通过修改 `shellfix-state.json` 回传选择结果
+- [x] 编码前缀始终注入（移除 `!shellIsPwsh` 守卫），pwsh 7 下 `[Console]::OutputEncoding` 默认为 GB2312 需要矫正
+- [x] 移除死代码 `shellIsPwsh` 变量
+- [x] 文档更新：CHANGELOG + 开发方案

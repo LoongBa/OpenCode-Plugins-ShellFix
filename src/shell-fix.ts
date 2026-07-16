@@ -96,8 +96,6 @@ import {
   isSafetyOnCooldown,
   markSafetyCooldown,
   SAFETY_COOLDOWN_MS,
-  type PwshCheckState,
-  setPwshCheckDismissed,
 } from "./lib/state";
 
 import {
@@ -135,7 +133,7 @@ import {
 // BUN 兼容：将所有 require() 提升为顶层 import
 import { execSync } from "child_process";
 import * as os from "os";
-import { existsSync, readFileSync } from "fs";
+import { existsSync, readFileSync, readdirSync } from "fs";
 import { join } from "path";
 
 // ====================================================================
@@ -298,24 +296,6 @@ export const ShellFixPlugin: Plugin = async () => {
     );
   }
 
-  // ── 检测 opencode.jsonc 是否配置 pwsh 且已安装（缓存启动时结果）────
-  const shellIsPwsh = (() => {
-    try {
-      const configPath = join(os.homedir(), ".config", "opencode", "opencode.jsonc");
-      if (existsSync(configPath)) {
-        const content = readFileSync(configPath, "utf-8");
-        if (!/"shell"\s*:\s*"[^"]*pwsh[^"]*"/i.test(content)) return false;
-      } else {
-        return false;
-      }
-    } catch { return false; }
-    // 配置说用 pwsh，再确认 pwsh 确实已安装
-    try {
-      execSync("where pwsh", { stdio: "ignore" });
-      return true;
-    } catch { return false; }
-  })();
-
   // ── PwshCheck：检测 OpenCode 是否使用 PowerShell 5.1（v2.2.9）────
   if (process.platform === "win32" && state.pwshCheck.dismissed !== "forever") {
     try {
@@ -326,7 +306,7 @@ export const ShellFixPlugin: Plugin = async () => {
         if (hasPwshShell) {
           // 已配置 pwsh，标记为已采纳
           state.pwshCheck.pending = false;
-          state.pwshCheck.dismissed = "accepted" as any;
+          state.pwshCheck.dismissed = "accepted";
           saveState(state);
         } else if (state.pwshCheck.dismissed !== "accepted") {
           // 未配置 pwsh → 先确认 pwsh 是否已安装
@@ -389,7 +369,7 @@ export const ShellFixPlugin: Plugin = async () => {
           case "auto": text = handleAutoCommand(pipeArgs); break;
         }
         const escaped = text.replace(/'/g, "''");
-        out.args.command = `${shellIsPwsh ? "" : ENCODING_PREFIX_PS}Write-Host '${escaped}'`;
+        out.args.command = `${ENCODING_PREFIX_PS}Write-Host '${escaped}'`;
         return;
       }
 
@@ -404,7 +384,7 @@ export const ShellFixPlugin: Plugin = async () => {
           case "auto": text = handleAutoCommand(slashArgs); break;
         }
         const escaped = text.replace(/'/g, "''");
-        out.args.command = `${shellIsPwsh ? "" : ENCODING_PREFIX_PS}Write-Host '${escaped}'`;
+        out.args.command = `${ENCODING_PREFIX_PS}Write-Host '${escaped}'`;
         return;
       }
 
@@ -445,8 +425,8 @@ export const ShellFixPlugin: Plugin = async () => {
         result = applyTailRule(result);
       }
 
-      // 编码前缀 — pwsh 7+ 默认 UTF-8 不需要注入
-      if (s.encoding && !shellIsPwsh &&
+      // 编码前缀 — 注入 $OutputEncoding + [Console]::OutputEncoding UTF-8
+      if (s.encoding &&
           !result.startsWith(ENCODING_PREFIX_PS) &&
           !result.startsWith(ENCODING_PREFIX_PWSH) &&
           !/^\s*(?:\$z=\[Text\.Encoding\]|\[Console\]::OutputEncoding\s*=|\[System\.Text\.UTF8Encoding\]|\$OutputEncoding\s*=)/i.test(result)) {
