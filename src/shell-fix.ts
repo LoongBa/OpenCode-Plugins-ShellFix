@@ -198,8 +198,11 @@ const EXPORT_RE = /^\s*export\s+/;
 const EXPORT_LINE_RE =
   /^\s*export\s+((?:\w+=(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\S+)\s*)+)(.*)$/s;
 
-const ENCODING_PREFIX =
-  "$z=[Text.Encoding]::UTF8;$OutputEncoding=[Console]::OutputEncoding=$z;";
+const ENCODING_PREFIX_PS =
+  "$OutputEncoding=[Console]::OutputEncoding=[Text.Encoding]::UTF8;";
+/** PowerShell 7+ (pwsh) — $OutputEncoding 默认为 UTF8，只需设 Console */
+const ENCODING_PREFIX_PWSH =
+  "[Console]::OutputEncoding=[Text.Encoding]::UTF8;";
 
 const PLUGIN_NAME = "ShellFix";
 
@@ -335,7 +338,7 @@ export const ShellFixPlugin: Plugin = async () => {
           case "auto": text = handleAutoCommand(pipeArgs); break;
         }
         const escaped = text.replace(/'/g, "''");
-        out.args.command = `${ENCODING_PREFIX}Write-Host '${escaped}'`;
+        out.args.command = `${tool === "pwsh" ? ENCODING_PREFIX_PWSH : ENCODING_PREFIX_PS}Write-Host '${escaped}'`;
         return;
       }
 
@@ -350,7 +353,7 @@ export const ShellFixPlugin: Plugin = async () => {
           case "auto": text = handleAutoCommand(slashArgs); break;
         }
         const escaped = text.replace(/'/g, "''");
-        out.args.command = `${ENCODING_PREFIX}Write-Host '${escaped}'`;
+        out.args.command = `${tool === "pwsh" ? ENCODING_PREFIX_PWSH : ENCODING_PREFIX_PS}Write-Host '${escaped}'`;
         return;
       }
 
@@ -394,8 +397,11 @@ export const ShellFixPlugin: Plugin = async () => {
       }
 
       // 编码前缀 — 检测是否已有编码设置（ShellFix 格式或其他格式），避免重复注入
-      if (s.encoding && !result.startsWith(ENCODING_PREFIX) && !/^\s*(?:\$z=\[Text\.Encoding\]|\[Console\]::OutputEncoding\s*=|\[System\.Text\.UTF8Encoding\]|\$OutputEncoding\s*=)/i.test(result)) {
-        result = `${ENCODING_PREFIX}${result}`;
+      if (s.encoding &&
+          !result.startsWith(ENCODING_PREFIX_PS) &&
+          !result.startsWith(ENCODING_PREFIX_PWSH) &&
+          !/^\s*(?:\$z=\[Text\.Encoding\]|\[Console\]::OutputEncoding\s*=|\[System\.Text\.UTF8Encoding\]|\$OutputEncoding\s*=)/i.test(result)) {
+        result = `${tool === "pwsh" ? ENCODING_PREFIX_PWSH : ENCODING_PREFIX_PS}${result}`;
       }
 
       out.args.command = result;
