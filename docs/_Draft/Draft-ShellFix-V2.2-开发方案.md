@@ -1,6 +1,6 @@
 # v2.2 开发方案 — 命令体系精简 + Palette 配置面板 + 命令错误追踪
 
-> 当前版本：v2.2.7
+> 当前版本：v2.2.8-dev
 > 审核日期：2026-07-16
 
 ---
@@ -203,27 +203,71 @@
 
 每个 palette 命令的 `title` 字段以 `ShellFix` 前缀开头，方便在 Ctrl+P 列表中快速区分。
 
-**版本号统一放在 palette 分组标题上**：所有 ShellFix 命令使用同一个 `category` 值 `ShellFix v${PLUGIN_VERSION}`，Ctrl+P 中会显示一个黄色的 `ShellFix v2.2.7` 分组，其下是所有子命令。
+**版本号统一放在 palette 分组标题上**：所有 ShellFix 命令使用同一个 `category` 值 `ShellFix v${PLUGIN_VERSION}`，Ctrl+P 中会显示一个黄色的 `ShellFix v2.2.8` 分组，其下是所有子命令。
 
 **命名格式**：`ShellFix [英文命令名] [中文简介]`，无 emoji。
 
 | name | title | category |
 |------|-------|----------|
-| `shellfix` | `ShellFix status 状态总览` | `ShellFix v2.2.7` |
-| `shellfix.encoding` | `ShellFix encoding 中文不乱码` | `ShellFix v2.2.7` |
-| `shellfix.bash` | `ShellFix bash 适配 Powershell 避免出错` | `ShellFix v2.2.7` |
-| `shellfix.log` | `ShellFix log 记录操作信息` | `ShellFix v2.2.7` |
-| `shellfix.git-env` | `ShellFix git-env 避免等待交互` | `ShellFix v2.2.7` |
-| `shellfix.git-eol` | `ShellFix git-eol 避免换行警告` | `ShellFix v2.2.7` |
-| `shellfix.kickme` | `ShellFix kickme 关键词通知` | `ShellFix v2.2.7` |
-| `shellfix.banner` | `ShellFix banner 启动版本信息` | `ShellFix v2.2.7` |
-| `shellfix.sysinfo` | `ShellFix sysinfo 查看系统信息` | `ShellFix v2.2.7` |
-| `shellfix.about` | `ShellFix about 版本与更新` | `ShellFix v2.2.7` |
-| `shellfix.help` | `ShellFix help 命令参考` | `ShellFix v2.2.7` |
-| `shellfix.my` | `ShellFix my 预设文本模板` | `ShellFix v2.2.7` |
-| `shellfix.note` | `ShellFix note 笔记标签` | `ShellFix v2.2.7` |
-| `shellfix.auto` | `ShellFix auto 自动注入上下文` | `ShellFix v2.2.7` |
-| `shellfix.cmd-errors` | `ShellFix cmd-errors 命令错误日志` | `ShellFix v2.2.7` |
+| `shellfix` | `ShellFix status 状态总览` | `ShellFix v2.2.8` |
+| `shellfix.encoding` | `ShellFix encoding 中文不乱码` | `ShellFix v2.2.8` |
+| `shellfix.bash` | `ShellFix bash 适配 Powershell 避免出错` | `ShellFix v2.2.8` |
+| `shellfix.log` | `ShellFix log 记录操作信息` | `ShellFix v2.2.8` |
+| `shellfix.git-env` | `ShellFix git-env 避免等待交互` | `ShellFix v2.2.8` |
+| `shellfix.git-eol` | `ShellFix git-eol 避免换行警告` | `ShellFix v2.2.8` |
+| `shellfix.kickme` | `ShellFix kickme 关键词通知` | `ShellFix v2.2.8` |
+| `shellfix.banner` | `ShellFix banner 启动版本信息` | `ShellFix v2.2.8` |
+| `shellfix.sysinfo` | `ShellFix sysinfo 查看系统信息` | `ShellFix v2.2.8` |
+| `shellfix.about` | `ShellFix about 版本与更新` | `ShellFix v2.2.8` |
+| `shellfix.help` | `ShellFix help 命令参考` | `ShellFix v2.2.8` |
+| `shellfix.my` | `ShellFix my 预设文本模板` | `ShellFix v2.2.8` |
+| `shellfix.note` | `ShellFix note 笔记标签` | `ShellFix v2.2.8` |
+| `shellfix.auto` | `ShellFix auto 自动注入上下文` | `ShellFix v2.2.8` |
+| `shellfix.cmd-errors` | `ShellFix cmd-errors 命令错误日志` | `ShellFix v2.2.8` |
+
+### 3.9 安全提醒层（Agent 提醒） — v2.2.8 计划
+
+**问题**：`rm -rf`、`sudo`、`chmod` 等命令有风险，但直接自动替换可能改变语义（如 `rm -rf` 换成 `Remove-Item -Recurse -Force` 可能误删）。需要更精细的处理方式。
+
+**方案**：三层命令处理体系完善
+
+```
+自动替换（把握大）      ──▶ 已实现：export/head/tail 等
+提醒 Agent（有风险）    ──▶ 新增：注入提示词让 Agent 自己修正
+提醒用户（已出错）      ──▶ 已实现：cmd-errors 追踪
+```
+
+#### 检测模式
+
+| 模式 | 示例 | 风险 | 处理方式 |
+|------|------|------|---------|
+| `rm -rf /` | `rm -rf /some/path` | 高危 | 提醒 Agent 确认路径后再执行 |
+| `sudo` | `sudo apt install` | 中危 | 提醒 Agent Windows 不需要 sudo |
+| `chmod` | `chmod +x script.sh` | 低危 | 提醒 Agent 用 PowerShell 等效命令 |
+| `curl \| bash` | `curl -sSL ... \| bash` | 高危 | 提醒 Agent 安全风险 |
+
+#### 冷却机制
+
+- 每种模式独立冷却（`safetyCooldowns: Record<string, number>`）
+- 冷却时间：5 分钟（300 秒），冷却期内不重复提醒同一种模式
+- 冷却记录持久化到 `PluginState`
+
+#### 注入方式
+
+在 `experimental.chat.system.transform` 钩子中，检查 `pendingSafetyWarnings[]`，将未过期的提醒注入到 system prompt：
+
+```
+[ShellFix 安全提醒] 注意：你刚才使用了 `rm -rf` 命令。
+Windows PowerShell 的 Remove-Item 行为不同，请确认路径正确后再执行。
+```
+
+#### 与现有机制的关系
+
+| 机制 | 触发时机 | 目标 |
+|------|---------|------|
+| 自动替换（已有） | 命令执行前 | 修正命令 |
+| 安全提醒（新增） | 命令执行前 | 让 Agent 自己修正 |
+| cmd-errors（已有） | 命令执行后 | 记录错误，长期学习 |
 
 ---
 
@@ -265,3 +309,11 @@
 - [x] `experimental.chat.system.transform` 自动注入 ≥2 次失败命令提醒
 - [x] `shellfix.cmd-errors` palette 入口：日志查看 + 清除
 - [x] 文档更新：开发方案、设计文档
+
+### v2.2.8 安全提醒层（计划）
+- [ ] `PluginState.safetyCooldowns` 冷却状态持久化
+- [ ] `tool.execute.before` 检测 rm -rf / sudo / chmod / curl|bash 等模式
+- [ ] `pendingSafetyWarnings[]` 标记待提醒的安全警告
+- [ ] `experimental.chat.system.transform` 注入安全提醒
+- [ ] 独立冷却：每种模式 5 分钟不重复
+- [ ] `shellfix.safety` palette 入口查看/清除安全提醒
