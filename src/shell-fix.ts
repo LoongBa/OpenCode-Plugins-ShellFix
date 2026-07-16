@@ -90,6 +90,12 @@ import {
   addCmdError,
   getCmdErrors,
   type CmdErrorEntry,
+  addSafetyWarning,
+  getPendingSafetyWarnings,
+  clearPendingSafetyWarnings,
+  isSafetyOnCooldown,
+  markSafetyCooldown,
+  SAFETY_COOLDOWN_MS,
 } from "./lib/state";
 
 import {
@@ -234,6 +240,44 @@ const HEAD_RE = /(\|\s*)head(?:\s+(?:-n\s*)?(\d+))?/;
 const TAIL_RE = /(\|\s*)tail(?:\s+(?!-f\b)(?:-n\s*)?(\d+))?/;
 
 // ====================================================================
+// 安全检测模式（v2.2.8）
+// ====================================================================
+
+interface SafetyPattern {
+  name: string;
+  risk: string;
+  re: RegExp;
+  message: string;
+}
+
+const SAFETY_PATTERNS: SafetyPattern[] = [
+  {
+    name: "rm-rf",
+    risk: "高危",
+    re: /rm\s+-rf\s+(?:\/|\.\/|[a-zA-Z]:\\|\$HOME)/,
+    message: "注意：你使用了 `rm -rf` 命令。请改用 Remove-Item -Recurse -Force，并确认路径正确后再执行。",
+  },
+  {
+    name: "sudo",
+    risk: "中危",
+    re: /sudo\s+/,
+    message: "注意：你使用了 `sudo` 命令。Windows 环境下没有 sudo，如果确实需要管理员权限，请以管理员身份运行 OpenCode。",
+  },
+  {
+    name: "chmod",
+    risk: "低危",
+    re: /chmod\s+/,
+    message: "注意：`chmod` 是 Linux 命令，Windows 环境下不需要。ShellFix 已内置 chmod 替换规则，可确保命令不报错。",
+  },
+  {
+    name: "curl-bash",
+    risk: "高危",
+    re: /curl\s+.*\|\s*(?:sh|bash)\b/,
+    message: "注意：`curl | bash` 存在安全风险（可能执行未经检查的远程脚本）。建议先下载查看内容，确认安全后再手动执行。",
+  },
+];
+
+// ====================================================================
 // 插件主入口
 // ====================================================================
 
@@ -312,6 +356,16 @@ export const ShellFixPlugin: Plugin = async () => {
 
       const s = loadState();
       let result = cmd;
+
+      // ── 安全检测（v2.2.8）：检测危险命令，标记待提醒 ────────
+      if (s.safetyCooldowns !== undefined) { // 兼容旧版 state 无此字段
+        for (const sp of SAFETY_PATTERNS) {
+          if (sp.re.test(cmd) && !isSafetyOnCooldown(sp.name)) {
+            addSafetyWarning({ pattern: sp.name, message: sp.message });
+            markSafetyCooldown(sp.name, SAFETY_COOLDOWN_MS);
+          }
+        }
+      }
 
       // 命令替换（按开关执行）
       if (s.cmdRules.export) {
@@ -423,6 +477,16 @@ export const ShellFixPlugin: Plugin = async () => {
       if (frequentErrors.length > 0) {
         const hints = frequentErrors.map((e) => `\`${e.cmd}\` (${e.count} 次)`).join("、");
         out.content += `\n\n[ShellFix] 注意：以下命令在 PowerShell 中不存在，请使用等效命令：${hints}。`;
+      }
+
+      // 安全提醒（v2.2.8）：将待提醒的安全警告注入 system prompt
+      const pendingSafety = getPendingSafetyWarnings();
+      if (pendingSafety.length > 0) {
+        const warnings = pendingSafety
+          .map((w) => `[ShellFix 安全提醒] ${w.message}`)
+          .join("\n\n");
+        out.content += `\n\n---\n${warnings}`;
+        clearPendingSafetyWarnings();
       }
 
       // prompt 模式：追加提示引导

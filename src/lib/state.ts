@@ -50,7 +50,7 @@ export interface CmdRules {
 /** @deprecated AutoState 已在 PluginState 中移除，由 autoRules/require/autoMode/moduleConditions 替代 */
 
 /** 当前插件版本号（单一事实来源） */
-export const PLUGIN_VERSION = "2.2.2";
+export const PLUGIN_VERSION = "2.2.8";
 
 export interface SyncConfig {
   repoUrl: string;
@@ -76,6 +76,8 @@ export interface PluginState {
   pendingDynamic: string[];
   gitLineEnding: "auto" | "config" | "off";
   cmdErrors: CmdErrorEntry[];
+  pendingSafetyWarnings: SafetyWarnEntry[];
+  safetyCooldowns: Record<string, number>;
 }
 
 export interface CmdErrorEntry {
@@ -84,6 +86,11 @@ export interface CmdErrorEntry {
   firstSeen: string;
   lastSeen: string;
   notified: boolean;
+}
+
+export interface SafetyWarnEntry {
+  pattern: string;  // 安全模式名称（rm-rf / sudo / chmod / curl-bash）
+  message: string;  // 提醒文本
 }
 
 export interface KickmeRule {
@@ -136,6 +143,21 @@ export const CMD_RULES_META: CmdRuleMeta[] = [
   { name: "tail", label: "tail→Select-Object -Last", description: "| tail [-n] N → | Select-Object -Last N (仅管道后，跳过 tail -f)", defaultOn: true },
 ];
 
+/** 安全提醒模式元信息，供 palette 渲染 */
+export interface SafetyPatternMeta {
+  name: string;
+  risk: string;    // "高" | "中" | "低"
+  label: string;
+  description: string;
+}
+
+export const SAFETY_PATTERNS_META: SafetyPatternMeta[] = [
+  { name: "rm-rf",   risk: "高", label: "rm -rf",  description: "检测 rm -rf 命令，提醒确认路径" },
+  { name: "sudo",    risk: "中", label: "sudo",     description: "Windows 无 sudo，提醒用管理员身份" },
+  { name: "chmod",   risk: "低", label: "chmod",    description: "Windows 不需要 chmod，提醒忽略" },
+  { name: "curl-bash", risk: "高", label: "curl|bash", description: "管道安装安全风险，提醒检查内容" },
+];
+
 // ====================================================================
 // 默认值与路径
 // ====================================================================
@@ -174,6 +196,8 @@ const DEFAULT_STATE: PluginState = {
   pendingDynamic: [],
   gitLineEnding: "auto",
   cmdErrors: [],
+  pendingSafetyWarnings: [],
+  safetyCooldowns: {},
 };
 
 // ====================================================================
@@ -657,6 +681,62 @@ export function markCmdErrorNotified(cmd: string): void {
 export function clearCmdErrors(): void {
   const s = loadState();
   s.cmdErrors = [];
+  saveState(s);
+}
+
+// ====================================================================
+// SafetyWarn 安全提醒
+// ====================================================================
+
+/** 安全提醒冷却时间（5 分钟） */
+export const SAFETY_COOLDOWN_MS = 5 * 60 * 1000;
+
+/** 添加一条待提醒的安全警告 */
+export function addSafetyWarning(entry: SafetyWarnEntry): void {
+  const s = loadState();
+  // 避免重复：同 pattern 未消费时不应再添加
+  if (s.pendingSafetyWarnings.some((w) => w.pattern === entry.pattern)) return;
+  s.pendingSafetyWarnings.push(entry);
+  saveState(s);
+}
+
+/** 获取所有待提醒的安全警告 */
+export function getPendingSafetyWarnings(): SafetyWarnEntry[] {
+  return [...loadState().pendingSafetyWarnings];
+}
+
+/** 清除所有待提醒的安全警告（消费后调用） */
+export function clearPendingSafetyWarnings(): void {
+  const s = loadState();
+  s.pendingSafetyWarnings = [];
+  saveState(s);
+}
+
+/** 检查某安全模式是否在冷却中 */
+export function isSafetyOnCooldown(pattern: string): boolean {
+  const s = loadState();
+  const expiry = s.safetyCooldowns[pattern];
+  if (!expiry) return false;
+  if (Date.now() >= expiry) {
+    // 冷却已过期，清理
+    delete s.safetyCooldowns[pattern];
+    saveState(s);
+    return false;
+  }
+  return true;
+}
+
+/** 标记某安全模式冷却（从当前时间开始计时） */
+export function markSafetyCooldown(pattern: string, cooldownMs: number = SAFETY_COOLDOWN_MS): void {
+  const s = loadState();
+  s.safetyCooldowns[pattern] = Date.now() + cooldownMs;
+  saveState(s);
+}
+
+/** 清除所有安全提醒冷却 */
+export function clearSafetyCooldowns(): void {
+  const s = loadState();
+  s.safetyCooldowns = {};
   saveState(s);
 }
 

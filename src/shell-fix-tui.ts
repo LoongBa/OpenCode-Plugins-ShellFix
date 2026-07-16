@@ -92,6 +92,12 @@ import {
   clearCmdErrors,
   markCmdErrorNotified,
   type CmdErrorEntry,
+  SAFETY_PATTERNS_META,
+  type SafetyPatternMeta,
+  clearSafetyCooldowns,
+  getPendingSafetyWarnings,
+  clearPendingSafetyWarnings,
+  type SafetyWarnEntry,
 } from "./lib/state";
 
 import {
@@ -620,6 +626,15 @@ const tui: TuiPlugin = async (api, _options, _meta) => {
         namespace: "palette",
         run() {
           try { showCmdErrors(api); } catch (e) { console.error(`[ShellFix] palette error (shellfix.cmd-errors):`, e); }
+        },
+      },
+      {
+        name: "shellfix.safety",
+        title: "ShellFix safety 安全提醒",
+        category: SHELLFIX_CATEGORY,
+        namespace: "palette",
+        run() {
+          try { showSafety(api); } catch (e) { console.error(`[ShellFix] palette error (shellfix.safety):`, e); }
         },
       },
 
@@ -1356,6 +1371,7 @@ function showShellFixHelp(api: any): void {
     `shellfix.note      note 笔记标签`,
     `shellfix.auto      auto 自动注入上下文`,
     `shellfix.cmd-errors cmd-errors 命令错误日志`,
+    `shellfix.safety   safety 安全提醒`,
     ``,
     `所有命令通过 Ctrl+P 访问。`,
   ];
@@ -1401,6 +1417,45 @@ function showCmdErrors(api: any): void {
     }
   } catch (e) {
     console.error(`[ShellFix] showCmdErrors error:`, e);
+  }
+}
+
+/** 安全提醒面板 — 查看各模式冷却状态，可清除冷却 */
+function showSafety(api: any): void {
+  try {
+    const s = loadState();
+    const cooldowns = s.safetyCooldowns || {};
+    const pending = getPendingSafetyWarnings();
+    const now = Date.now();
+    const lines: string[] = [
+      `ShellFix 安全提醒 — 检测高危命令，提醒 Agent 修正`,
+      ``,
+      `  风险  模式        冷却状态`,
+      ...SAFETY_PATTERNS_META.map((meta: SafetyPatternMeta) => {
+        const expiry = cooldowns[meta.name];
+        const remaining = expiry ? Math.max(0, Math.ceil((expiry - now) / 1000)) : 0;
+        const status = remaining > 0 ? `${remaining}s 冷却中` : "就绪";
+        return `  ${meta.risk === "高" ? "🔴" : meta.risk === "中" ? "🟡" : "🟢"}   ${meta.name.padEnd(12)} ${status}`;
+      }),
+      ``,
+      pending.length > 0 ? `待提醒: ${pending.length} 条` : `待提醒: 无`,
+      `冷却时间: 5 分钟`,
+      ``,
+      `确认清除所有冷却和待提醒`,
+    ];
+    api.ui.dialog?.replace?.(() =>
+      api.ui.DialogAlert({
+        title: "ShellFix safety 安全提醒",
+        message: lines.join("\n"),
+        onConfirm: () => {
+          clearSafetyCooldowns();
+          clearPendingSafetyWarnings();
+          api.ui.toast({ message: "安全提醒冷却已清除" });
+        },
+      })
+    );
+  } catch (e) {
+    console.error(`[ShellFix] showSafety error:`, e);
   }
 }
 
