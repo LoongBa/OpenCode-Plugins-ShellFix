@@ -2,7 +2,7 @@
 
 **Windows PowerShell 三大修复 + 六命令体系**
 
-当前版本：**v2.2.2**
+当前版本：**v2.2.8**
 
 ---
 
@@ -73,12 +73,12 @@ git commit -m "fix"
 每条命令前自动注入 UTF-8 编码设置：
 
 ```powershell
-$z=[Text.Encoding]::UTF8;$OutputEncoding=[Console]::OutputEncoding=$z;
+$OutputEncoding=[Console]::OutputEncoding=[Text.Encoding]::UTF8;
 ```
 
 PowerShell 非交互子进程默认输出编码为系统代码页（Windows 常见 GBK），导致中文乱码。插件强制设置管道和控制台编码为 UTF-8。
 
-> 优化：v2.1.1 将前缀从 120 字符压缩至 69 字符（-42%），每条命令节省 ~12 tokens。
+> 优化：v2.1.1 将前缀从 120 字符压缩至 69 字符（-42%），v2.2.8 再压缩至 64 字符，pwsh 7+ 跳过 `$OutputEncoding` 进一步减至 51 字符。
 
 ### ② export → $env: 自动转换
 

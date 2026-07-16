@@ -1,5 +1,22 @@
 # Changelog
 
+## v2.2.8 (2026-07-16)
+
+### 新功能 — 安全提醒层 + 编码前缀优化
+
+- **安全提醒层**：在 `tool.execute.before` 检测 4 种危险命令模式（`rm -rf`、`sudo`、`chmod`、`curl|bash`），标记待提醒；Agent 下次收到 system prompt 时自动注入安全警告
+  - 每模式独立 5 分钟冷却，持久化到 `PluginState.safetyCooldowns`
+  - `shellfix.safety` palette 入口查看/清除冷却状态
+- **编码前缀再优化**：v2.1.1 基础上再减 5 字符（69→64），pwsh 7+ 跳过 `$OutputEncoding` 仅 51 字符
+  - bash 工具用链式赋值：`$OutputEncoding=[Console]::OutputEncoding=[Text.Encoding]::UTF8;`
+  - pwsh 工具跳过 `$OutputEncoding`：`[Console]::OutputEncoding=[Text.Encoding]::UTF8;`
+  - 管道/斜杠命令处理器也按工具类型选前缀
+
+### 修复
+
+- **`system.transform` 早期返回**：当无 auto 模块启用时，cmdErrors 和安全提醒被跳过不注入；改为先注入错误/安全提醒再判断是否返回
+- **移除冗余守卫**：`s.safetyCooldowns !== undefined` 不再需要（`loadState` 深度合并始终提供默认值）
+
 ## v2.2.2 (2026-07-14)
 
 ### 微调 — Palette 标题 + 新功能

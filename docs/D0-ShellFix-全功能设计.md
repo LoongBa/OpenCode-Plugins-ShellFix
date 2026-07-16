@@ -1,7 +1,7 @@
 # ShellFix 完整设计方案
 
 > 一个插件，三大修复 + TUI 调度器 + MCP
-> 当前版本 v2.2.2
+> 当前版本 v2.2.8
 
 ---
 
@@ -75,7 +75,7 @@ ShellFix
 ## 2. Palette 命令总表（Ctrl+P）
 
 ```
-ShellFix v2.2.2  ← 黄色分组标题
+ShellFix v2.2.8  ← 黄色分组标题
 ├── status       状态总览
 ├── encoding     中文不乱码
 ├── bash         适配 Powershell 避免出错
@@ -381,6 +381,10 @@ v2.2.x — 当前系列
 │           sysinfo/bash 改名
 │           TUI/逻辑分离
 │           启动日志开关
+├── v2.2.8  安全提醒层 + 编码前缀再优化
+│           4 种危险命令检测 + 冷却
+│           encoding 前缀分 bash/pwsh 变体
+│           system.transform 早期返回修复
 │
 v3.0（规划）
 ├── Tag 系统：自动/手动打标签
