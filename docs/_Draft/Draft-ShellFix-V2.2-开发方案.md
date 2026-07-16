@@ -1,6 +1,6 @@
 # v2.2 开发方案 — 命令体系精简 + Palette 配置面板 + 命令错误追踪
 
-> 当前版本：v2.2.8-dev
+> 当前版本：v2.2.9-dev
 > 审核日期：2026-07-16
 
 ---
@@ -318,3 +318,64 @@ Windows PowerShell 的 Remove-Item 行为不同，请确认路径正确后再执
 - [x] 独立冷却：每种模式 5 分钟不重复
 - [x] `shellfix.safety` palette 入口查看/清除安全提醒
 - [x] 文档更新：开发方案
+
+### v2.2.9 PwshCheck — PowerShell 版本检测引导
+
+#### 背景
+
+OpenCode 在 Windows 上默认使用 `powershell.exe`（PS 5.1），即使系统已安装 `pwsh` 7+。已确认官方 `"shell": "pwsh"` 配置可解决此问题，但用户需手动添加。
+
+#### 设计
+
+**检测时机**：插件加载时（`setup`/模块初始化），一次性检测。
+
+**检测逻辑**：
+
+```
+win32?
+  ├─ 是 → 读取 ~/.config/opencode/opencode.jsonc
+  │      ├─ 含 "shell":"...pwsh..." → 已配置，静默跳过
+  │      └─ 不含 → 标记 pwshCheck.pending = true
+  └─ 否 → 跳过（macOS/Linux 无此问题）
+```
+
+**状态字段**（`src/lib/state.ts`）：
+
+```typescript
+interface PwshCheckState {
+  pending: boolean;       // 检测到问题，待处理
+  dismissed: string;      // 'pending' | 'dismissed' | 'forever'
+}
+PluginState.pwshCheck: PwshCheckState;
+```
+
+| dismissed 值 | 含义 | 下次启动行为 |
+|---|---|---|
+| `pending` | 未处理 | 重新检测并提示 |
+| `dismissed` | 以后再说 | 重新检测并提示 |
+| `forever` | 不再提醒 | 跳过检测 |
+
+**注入时机**：`experimental.chat.system.transform`，仅首轮（注入后设 `pending = false`）。
+
+**Agent 交互协议**：注入的提示文本指导 Agent 询问用户，并提供三种处理路径：
+
+```text
+[ShellFix 系统配置] 检测到 OpenCode 当前使用 PowerShell 5.1。
+建议切换为 pwsh 以获得完整 PS7 API 和 UTF-8 编码。
+
+请询问用户：
+1. "改"        → Agent 编辑 opencode.jsonc 添加 "shell": "pwsh"
+2. "以后再说"  → Agent 编辑 shellfix-state.json，设 dismissed = "dismissed"
+3. "不再提醒"  → Agent 编辑 shellfix-state.json，设 dismissed = "forever"
+```
+
+**不增加 palette 入口**：此为一次性引导，无需面板管理。
+
+#### 交付清单
+
+- [ ] `src/lib/state.ts` — `PwshCheckState` 接口 + `PluginState.pwshCheck` 字段 + `DEFAULT_STATE` 默认值 + `setPwshCheckDismissed()` API
+- [ ] `src/shell-fix.ts` — 插件启动时检测 `opencode.jsonc` 是否含 `"shell": "...pwsh..."`
+- [ ] `src/shell-fix.ts` — `experimental.chat.system.transform` 注入 Agent 交互协议
+- [ ] 首次消费后 `pending = false`，避免重复注入
+- [ ] Agent 通过修改 `shellfix-state.json` 回传选择结果
+- [ ] 文档更新：CHANGELOG + 开发方案

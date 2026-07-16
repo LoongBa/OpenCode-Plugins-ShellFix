@@ -96,6 +96,8 @@ import {
   isSafetyOnCooldown,
   markSafetyCooldown,
   SAFETY_COOLDOWN_MS,
+  type PwshCheckState,
+  setPwshCheckDismissed,
 } from "./lib/state";
 
 import {
@@ -133,7 +135,8 @@ import {
 // BUN 兼容：将所有 require() 提升为顶层 import
 import { execSync } from "child_process";
 import * as os from "os";
-import { existsSync, readdirSync } from "fs";
+import { existsSync, readFileSync } from "fs";
+import { join } from "path";
 
 // ====================================================================
 // 辅助函数
@@ -293,6 +296,36 @@ export const ShellFixPlugin: Plugin = async () => {
         `rules:${getEnabledRuleNames(state).length} ` +
         `log:${state.log ? "ON" : "OFF"}`
     );
+  }
+
+  // ── PwshCheck：检测 OpenCode 是否使用 PowerShell 5.1（v2.2.9）────
+  if (process.platform === "win32" && state.pwshCheck.dismissed !== "forever") {
+    try {
+      const configPath = join(os.homedir(), ".config", "opencode", "opencode.jsonc");
+      if (existsSync(configPath)) {
+        const content = readFileSync(configPath, "utf-8");
+        const hasPwshShell = /"shell"\s*:\s*"[^"]*pwsh[^"]*"/i.test(content);
+        if (hasPwshShell) {
+          // 已配置 pwsh，标记为已采纳
+          state.pwshCheck.pending = false;
+          state.pwshCheck.dismissed = "accepted" as any;
+          saveState(state);
+        } else if (state.pwshCheck.dismissed !== "accepted") {
+          // 未配置 pwsh → 先确认 pwsh 是否已安装
+          let pwshFound = false;
+          try {
+            execSync("where pwsh", { stdio: "ignore" });
+            pwshFound = true;
+          } catch { /* pwsh 未安装 */ }
+          if (pwshFound) {
+            state.pwshCheck.pending = true;
+            saveState(state);
+          }
+        }
+      }
+    } catch {
+      // 无法读取配置文件，静默跳过
+    }
   }
 
   return {
@@ -493,8 +526,23 @@ export const ShellFixPlugin: Plugin = async () => {
         clearPendingSafetyWarnings();
       }
 
+      // PwshCheck（v2.2.9）：检测到 PS 5.1 且未配置 pwsh，引导 Agent 询问用户
+      const pwshPending = s.pwshCheck.pending && s.pwshCheck.dismissed === "pending";
+      if (pwshPending) {
+        out.content += `\n\n---\n\n[ShellFix 系统配置]
+检测到 OpenCode 当前使用 Windows PowerShell 5.1。
+建议切换为 pwsh（PowerShell 7）以获得完整 PS7 API 支持、UTF-8 编码和 Profile 加载。
+
+请询问用户是否要处理：
+1. "改" → 编辑 ~/.config/opencode/opencode.jsonc，在 "$schema" 下方添加 "shell": "pwsh",，然后告知用户需重启生效
+2. "以后再说" → 将 ~/.config/opencode/shellfix-state.json 中 pwshCheck.dismissed 改为 "dismissed"
+3. "不再提醒" → 将 shellfix-state.json 中 pwshCheck.dismissed 改为 "forever"`;
+        s.pwshCheck.pending = false;
+        saveState(s);
+      }
+
       // 没有可注入的内容 + 没有待提醒 → 无需修改系统提示
-      if (chunks.length === 0 && frequentErrors.length === 0 && pendingSafety.length === 0) {
+      if (chunks.length === 0 && frequentErrors.length === 0 && pendingSafety.length === 0 && !pwshPending) {
         // 仅 prompt 模式且已注入 chunks 才追加引导语（否则 return）
         return;
       }

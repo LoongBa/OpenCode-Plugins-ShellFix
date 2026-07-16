@@ -60,6 +60,11 @@ export interface SyncConfig {
   lastSyncAt: string;
 }
 
+export interface PwshCheckState {
+  pending: boolean;
+  dismissed: "pending" | "dismissed" | "forever";
+}
+
 export interface PluginState {
   version: string;
   encoding: boolean;
@@ -78,6 +83,7 @@ export interface PluginState {
   cmdErrors: CmdErrorEntry[];
   pendingSafetyWarnings: SafetyWarnEntry[];
   safetyCooldowns: Record<string, number>;
+  pwshCheck: PwshCheckState;
 }
 
 export interface CmdErrorEntry {
@@ -198,6 +204,7 @@ const DEFAULT_STATE: PluginState = {
   cmdErrors: [],
   pendingSafetyWarnings: [],
   safetyCooldowns: {},
+  pwshCheck: { pending: false, dismissed: "pending" },
 };
 
 // ====================================================================
@@ -737,6 +744,18 @@ export function markSafetyCooldown(pattern: string, cooldownMs: number = SAFETY_
 export function clearSafetyCooldowns(): void {
   const s = loadState();
   s.safetyCooldowns = {};
+  saveState(s);
+}
+
+// ====================================================================
+// PwshCheck 版本检测引导（v2.2.9）
+// ====================================================================
+
+/** 设置 pwsh 检测结果为已处理 */
+export function setPwshCheckDismissed(mode: "dismissed" | "forever"): void {
+  const s = loadState();
+  s.pwshCheck.pending = false;
+  s.pwshCheck.dismissed = mode;
   saveState(s);
 }
 
