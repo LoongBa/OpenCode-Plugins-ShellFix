@@ -132,8 +132,8 @@ export const CMD_RULES_META: CmdRuleMeta[] = [
   { name: "touch", label: "touch→New-Item", description: "touch file → New-Item -ItemType File", defaultOn: false },
   { name: "rm", label: "rm→Remove-Item", description: "rm path → Remove-Item -Recurse -Force", defaultOn: false },
   { name: "chmod", label: "chmod→warn", description: "chmod → Write-Warning (安全忽略)", defaultOn: false },
-  { name: "head", label: "head→Select-Object -First", description: "| head [-n] N → | Select-Object -First N (仅管道后)", defaultOn: false },
-  { name: "tail", label: "tail→Select-Object -Last", description: "| tail [-n] N → | Select-Object -Last N (仅管道后，跳过 tail -f)", defaultOn: false },
+  { name: "head", label: "head→Select-Object -First", description: "| head [-n] N → | Select-Object -First N (仅管道后)", defaultOn: true },
+  { name: "tail", label: "tail→Select-Object -Last", description: "| tail [-n] N → | Select-Object -Last N (仅管道后，跳过 tail -f)", defaultOn: true },
 ];
 
 // ====================================================================
@@ -155,8 +155,8 @@ const DEFAULT_STATE: PluginState = {
     touch: false,
     rm: false,
     chmod: false,
-    head: false,
-    tail: false,
+    head: true,
+    tail: true,
   },
   autoMode: "prompt",
   require: "",
