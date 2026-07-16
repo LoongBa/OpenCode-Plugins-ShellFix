@@ -310,10 +310,11 @@ Windows PowerShell 的 Remove-Item 行为不同，请确认路径正确后再执
 - [x] `shellfix.cmd-errors` palette 入口：日志查看 + 清除
 - [x] 文档更新：开发方案、设计文档
 
-### v2.2.8 安全提醒层（计划）
-- [ ] `PluginState.safetyCooldowns` 冷却状态持久化
-- [ ] `tool.execute.before` 检测 rm -rf / sudo / chmod / curl|bash 等模式
-- [ ] `pendingSafetyWarnings[]` 标记待提醒的安全警告
-- [ ] `experimental.chat.system.transform` 注入安全提醒
-- [ ] 独立冷却：每种模式 5 分钟不重复
-- [ ] `shellfix.safety` palette 入口查看/清除安全提醒
+### v2.2.8 安全提醒层
+- [x] `PluginState.safetyCooldowns` 冷却状态持久化
+- [x] `PluginState.pendingSafetyWarnings` 待提醒安全警告
+- [x] `tool.execute.before` 检测 rm -rf / sudo / chmod / curl|bash 等模式（4 种）
+- [x] `experimental.chat.system.transform` 注入安全提醒
+- [x] 独立冷却：每种模式 5 分钟不重复
+- [x] `shellfix.safety` palette 入口查看/清除安全提醒
+- [x] 文档更新：开发方案
