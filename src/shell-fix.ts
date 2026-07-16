@@ -361,12 +361,10 @@ export const ShellFixPlugin: Plugin = async () => {
       let result = cmd;
 
       // ── 安全检测（v2.2.8）：检测危险命令，标记待提醒 ────────
-      if (s.safetyCooldowns !== undefined) { // 兼容旧版 state 无此字段
-        for (const sp of SAFETY_PATTERNS) {
-          if (sp.re.test(cmd) && !isSafetyOnCooldown(sp.name)) {
-            addSafetyWarning({ pattern: sp.name, message: sp.message });
-            markSafetyCooldown(sp.name, SAFETY_COOLDOWN_MS);
-          }
+      for (const sp of SAFETY_PATTERNS) {
+        if (sp.re.test(cmd) && !isSafetyOnCooldown(sp.name)) {
+          addSafetyWarning({ pattern: sp.name, message: sp.message });
+          markSafetyCooldown(sp.name, SAFETY_COOLDOWN_MS);
         }
       }
 
@@ -472,10 +470,10 @@ export const ShellFixPlugin: Plugin = async () => {
         saveState(s);
       }
 
-      if (chunks.length === 0) return;
-
-      const separator = "\n\n---\n";
-      out.content = out.content + separator + chunks.join("\n\n");
+      if (chunks.length > 0) {
+        const separator = "\n\n---\n";
+        out.content = out.content + separator + chunks.join("\n\n");
+      }
 
       // 命令错误提醒：Agent 多次执行了不存在的命令时，提示改用 PowerShell 等效命令
       const cmdErrors = getCmdErrors();
@@ -495,8 +493,14 @@ export const ShellFixPlugin: Plugin = async () => {
         clearPendingSafetyWarnings();
       }
 
+      // 没有可注入的内容 + 没有待提醒 → 无需修改系统提示
+      if (chunks.length === 0 && frequentErrors.length === 0 && pendingSafety.length === 0) {
+        // 仅 prompt 模式且已注入 chunks 才追加引导语（否则 return）
+        return;
+      }
+
       // prompt 模式：追加提示引导
-      if (s.autoMode === "prompt") {
+      if (s.autoMode === "prompt" && chunks.length > 0) {
         out.content +=
           "\n\n[注] 以上为 ShellFix 自动注入的上下文。用 /auto 查看和管理。";
       }
