@@ -298,16 +298,22 @@ export const ShellFixPlugin: Plugin = async () => {
     );
   }
 
-  // ── 检测 opencode.jsonc 是否配置 pwsh（缓存启动时结果）────
+  // ── 检测 opencode.jsonc 是否配置 pwsh 且已安装（缓存启动时结果）────
   const shellIsPwsh = (() => {
     try {
       const configPath = join(os.homedir(), ".config", "opencode", "opencode.jsonc");
       if (existsSync(configPath)) {
         const content = readFileSync(configPath, "utf-8");
-        return /"shell"\s*:\s*"[^"]*pwsh[^"]*"/i.test(content);
+        if (!/"shell"\s*:\s*"[^"]*pwsh[^"]*"/i.test(content)) return false;
+      } else {
+        return false;
       }
-    } catch {}
-    return false;
+    } catch { return false; }
+    // 配置说用 pwsh，再确认 pwsh 确实已安装
+    try {
+      execSync("where pwsh", { stdio: "ignore" });
+      return true;
+    } catch { return false; }
   })();
 
   // ── PwshCheck：检测 OpenCode 是否使用 PowerShell 5.1（v2.2.9）────
@@ -383,7 +389,7 @@ export const ShellFixPlugin: Plugin = async () => {
           case "auto": text = handleAutoCommand(pipeArgs); break;
         }
         const escaped = text.replace(/'/g, "''");
-        out.args.command = `${shellIsPwsh ? ENCODING_PREFIX_PWSH : ENCODING_PREFIX_PS}Write-Host '${escaped}'`;
+        out.args.command = `${shellIsPwsh ? "" : ENCODING_PREFIX_PS}Write-Host '${escaped}'`;
         return;
       }
 
@@ -398,7 +404,7 @@ export const ShellFixPlugin: Plugin = async () => {
           case "auto": text = handleAutoCommand(slashArgs); break;
         }
         const escaped = text.replace(/'/g, "''");
-        out.args.command = `${shellIsPwsh ? ENCODING_PREFIX_PWSH : ENCODING_PREFIX_PS}Write-Host '${escaped}'`;
+        out.args.command = `${shellIsPwsh ? "" : ENCODING_PREFIX_PS}Write-Host '${escaped}'`;
         return;
       }
 
@@ -439,12 +445,12 @@ export const ShellFixPlugin: Plugin = async () => {
         result = applyTailRule(result);
       }
 
-      // 编码前缀 — 检测是否已有编码设置（ShellFix 格式或其他格式），避免重复注入
-      if (s.encoding &&
+      // 编码前缀 — pwsh 7+ 默认 UTF-8 不需要注入
+      if (s.encoding && !shellIsPwsh &&
           !result.startsWith(ENCODING_PREFIX_PS) &&
           !result.startsWith(ENCODING_PREFIX_PWSH) &&
           !/^\s*(?:\$z=\[Text\.Encoding\]|\[Console\]::OutputEncoding\s*=|\[System\.Text\.UTF8Encoding\]|\$OutputEncoding\s*=)/i.test(result)) {
-        result = `${shellIsPwsh ? ENCODING_PREFIX_PWSH : ENCODING_PREFIX_PS}${result}`;
+        result = `${ENCODING_PREFIX_PS}${result}`;
       }
 
       out.args.command = result;
