@@ -50,7 +50,7 @@ export interface CmdRules {
 /** @deprecated AutoState 已在 PluginState 中移除，由 autoRules/require/autoMode/moduleConditions 替代 */
 
 /** 当前插件版本号（单一事实来源） */
-export const PLUGIN_VERSION = "2.2.8";
+export const PLUGIN_VERSION = "2.2.9";
 
 export interface SyncConfig {
   repoUrl: string;
