@@ -389,3 +389,132 @@ PluginState.pwshCheck: PwshCheckState;
 - [x] 编码前缀始终注入（移除 `!shellIsPwsh` 守卫），pwsh 7 下 `[Console]::OutputEncoding` 默认为 GB2312 需要矫正
 - [x] 移除死代码 `shellIsPwsh` 变量
 - [x] 文档更新：CHANGELOG + 开发方案
+
+---
+
+# v2.2.10 开发方案 — 命令错误检测激活 + 裸 VAR=x 转换
+
+> 状态：✅ 已实现（2026-08-02） | 版本：2.2.10
+
+## 一、背景与问题
+
+### 1.1 cmd-errors 检测是"半成品"（v2.2.7 遗留）
+
+v2.2.7 已建成 cmd-errors 的**记录 + 提醒基础设施**：
+
+| 层 | 组件 | 位置 | 状态 |
+|----|------|------|------|
+| 状态 | `cmdErrors: CmdErrorEntry[]` + `addCmdError/getCmdErrors/markCmdErrorNotified/clearCmdErrors` | `src/lib/state.ts` 657-692 | ✅ 存在 |
+| 提醒 | `system.transform` 注入 `[ShellFix] 注意：以下命令在 PowerShell 中不存在...`（失败 ≥2 次） | `src/shell-fix.ts` 509-514 | ✅ 存在 |
+| 面板 | `shellfix.cmd-errors` palette 日志显示 | `src/shell-fix-tui.ts` 1389 | ✅ 存在 |
+
+**但检测钩子从未接入** —— `addCmdError()` 在 `shell-fix.ts` line 90 import 后**零调用点**。结论：
+
+- `cmdErrors` 恒为空数组 → `frequentErrors.length > 0` 恒 false → **提醒永不触发**
+- v2.2.7 提交信息自认：`Proactive: addCmdError() API for future detection hooks to call`
+
+**代码佐证**（ShellFix 源码审计）：
+
+```typescript
+// shell-fix.ts line 90-91：只有 import，无调用
+addCmdError,   // ← 全文件唯一出现（除 state.ts 定义处）
+getCmdErrors,  // ← line 510 有调用，但因数据为空永不触发
+```
+
+### 1.2 裸 `VAR=x`（无 export 前缀）不转换
+
+当前 `applyExportRule` 只匹配 `^\s*export\s+` 开头：
+
+```typescript
+if (!EXPORT_RE.test(cmd)) return cmd;  // 裸 GIT_MASTER=1 直接 return
+```
+
+Agent 写出 `GIT_MASTER=1`（bash 内联赋值）时 PowerShell 报 `The term 'GIT_MASTER=1' is not recognized`，且不属于任何现有转换规则 → 裸错误。
+
+### 1.3 报错后只有 Agent 自纠，无插件介入
+
+观察到的流程：`GIT_MASTER=1` 报错 → Agent 看到错误后自纠为 `$env:GIT_MASTER="1"`。这个纠正是 LLM 行为，插件无任何参与。错误次数、上下文、提醒都不存在。
+
+## 二、方案设计
+
+### 2.1 激活错误检测：新增 `tool.execute.after` 钩子
+
+API 已验证可用（`docs/09-API-探索报告.md` 2.5 节）：
+
+```typescript
+"tool.execute.after"?: (input: {
+    tool: string; sessionID: string; callID: string; args: any;
+}, output: { title: string; output: string; metadata: any; }) => Promise<void>;
+```
+
+**设计：**
+
+1. 仅在 `tool === "bash"` 时处理（其他工具输出不检测）
+2. 从 `output.output` 提取错误模式，匹配到则调用 `addCmdError(failedCmd)`
+3. **命令名提取**：从 `args.command` 取首个 token（去掉编码前缀后），或从错误文本正则提取
+4. 错误匹配后**立即注入**实时提示（见 2.3），不等下轮 system.transform
+
+**错误模式正则（PowerShell 中英文）：**
+
+| 语言 | 模式 | 正则 |
+|------|------|------|
+| 中文 | `无法将"X"项识别为 cmdlet` | `/无法将["'`"]([^"'`"]+)["'`"]\s*项识别为\s*(?:cmdlet|函数|脚本文件|可运行程序)/` |
+| 中文 | `不是内部或外部命令` | `/["'`"]([^"'`"]+)["'`"]\s*不是内部或外部命令/` |
+| 中文 | `找不到`（路径/文件） | `/找不到.*?["'`"]([^"'`"]+)["'`"]/` |
+| 英文 | `is not recognized` | `/The term ['"`]([^'"`"]+)['"`"] is not recognized/` |
+| 英文 | `not found` | `/([a-zA-Z_][\w.-]*): (?:command )?not found/` |
+| 英文 | `cannot be found` | `/Cannot find (?:path|file) ['"`"]([^'"`"]+)['"`"]/` |
+
+**去重策略**：相同命令跨会话累计 count（复用现有 `addCmdError` 逻辑），触发提醒阈值 = count ≥ 2。
+
+### 2.2 裸 `VAR=x` 转换规则（新增 cmdRule）
+
+**匹配**：行首 `^\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)$`（无 `export` 前缀、非命令）
+
+**注意歧义排除**（避免误转 PowerShell 合法语法）：
+
+| 排除场景 | 示例 | 原因 |
+|----------|------|------|
+| `$env:X=` 已带前缀 | `$env:FOO="x"` | 已是 PS 语法 |
+| 含命令（后随 `;`/`&&`/`|` 且左侧非赋值） | `echo a=b` | 不是赋值 |
+| 比较运算符 | `if ($x = 5)` | 赋值 vs 比较歧义，仅处理行首独立赋值 |
+| 参数传递 `key=value`（非行首） | `cmd --flag k=v` | 不是环境变量赋值 |
+
+**转换输出**：`GIT_MASTER=1` → `$env:GIT_MASTER="1";`（无值 `VAR=` → `$env:VAR="";`）
+
+**开关**：新增 `cmdRules.bareEnv`（默认 on），可 `/shellfix cmd bareEnv on/off` 独立控制。
+
+### 2.3 实时提示注入（等 system.transform 太慢）
+
+现状：`system.transform` 只在**下轮 LLM 调用**时注入 → Agent 需要再发起一次才能看到提示。
+
+**改进**：`tool.execute.after` 检测到错误时，通过 `experimental.chat.message` 的 output 追加一段实时提示：
+
+```
+[ShellFix 提示] 检测到 PowerShell 错误：`GIT_MASTER=1` 不是有效命令。
+PowerShell 环境变量赋值请用：$env:GIT_MASTER="1";
+```
+
+**回退策略**：若消息注入不可行（API 限制），保持 system.transform 注入，但把阈值从 ≥2 降到 ≥1（首次即提醒）。
+
+### 2.4 与现有机制的关系
+
+| 机制 | 关系 |
+|------|------|
+| `applyExportRule` | 互补：`export X=1` 走旧规则，裸 `X=1` 走新规则 |
+| `addCmdError` | 复用现有 API，补上缺失的调用点 |
+| `system.transform` 提醒 | 保留为兜底（跨会话持久），`tool.execute.after` 为实时层 |
+| `/shellfix cmd-errors` 面板 | 数据源从空数组变为真实记录，面板自动生效 |
+
+## 三、交付清单
+
+- [x] `src/shell-fix.ts` — 新增 `tool.execute.after` 钩子（错误模式正则 + `addCmdError` 调用）
+- [x] `src/shell-fix.ts` — 实时提示注入（`tool.execute.after` 追加到工具输出，system.transform 兜底保留）
+- [x] `src/lib/state.ts` — `cmdRules.bareEnv` 状态字段 + 默认值
+- [x] `src/shell-fix.ts` — `applyBareEnvRule()` + 排除歧义逻辑 + `cmdRules.bareEnv` 开关接入
+- [x] `src/shell-fix-tui.ts` — `/shellfix cmd` 面板自动含 bareEnv（CMD_RULES_META 驱动，无需改动）
+- [x] 测试：`GIT_MASTER=1` 报错 → 检测 → 实时提示；`export FOO=1` 不受影响；`$env:X="1"` 不被误转（14 转换用例 + 6 正则用例全通过）
+- [x] 文档：CHANGELOG + README + 开发方案
+- [x] 版本号 bump v2.2.9 → v2.2.10（`src/lib/state.ts` PLUGIN_VERSION）
+
+> 实现注记（与方案 2.3 的差异）：实时提示未走 `experimental.chat.message`，而是直接在 `tool.execute.after` 中追加到 `output.output`（工具结果末尾）。理由：工具执行后输出直接返回给 LLM，追加即实时可见，无需等待下一条用户消息触发 chat.message；`experimental` API 不稳定，避免依赖。system.transform ≥2 兜底保留。

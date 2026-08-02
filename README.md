@@ -2,7 +2,7 @@
 
 **Windows PowerShell 三大修复 + 六命令体系**
 
-当前版本：**v2.2.9**
+当前版本：**v2.2.10**
 
 ---
 
@@ -93,6 +93,20 @@ Agent 生成的 Linux export 语法被自动转换为 PowerShell 兼容写法：
 
 不再出现大量错误，减少重复对话。
 
+**裸 `VAR=x` 也自动转换**（v2.2.10，`cmdRules.bareEnv` 默认 on）：
+
+| Agent 输出      | 插件转换后              |
+| --------------- | ----------------------- |
+| `GIT_MASTER=1`  | `$env:GIT_MASTER="1";`  |
+| `VAR=`          | `$env:VAR="";`          |
+
+> 歧义排除：`$env:` 前缀、`export` 前缀、`echo a=b` 这类命令含 `=`、`if ($x = 5)` 比较、`cmd --flag k=v` 参数、`FOO=1 && make` 命令链均不误转。
+
+**命令错误实时检测**（v2.2.10）：`tool.execute.after` 钩子匹配 PowerShell 中英文报错（`无法将"X"项识别为 cmdlet`、`X 不是内部或外部命令`、`The term 'X' is not recognized`、`X: command not found` 等 6 类），命中后：
+- 记录到命令错误日志（`/shellfix cmd-errors` 可查看，跨会话累计次数）
+- 在工具输出末尾追加实时提示 `[ShellFix 提示] ...`，Agent 下一轮立即可见
+- 多次失败（≥2 次）还会通过 system prompt 注入兜底提醒
+
 ### ③ Git 免交互，避免官方插件的啰嗦和浪费
 
 在**进程初始化时**注入 16 个非交互环境变量，子进程自动继承，无需写进命令字符串：
@@ -174,7 +188,7 @@ warning: in the working copy of 'foo.ts', LF will be replaced by CRLF the next t
 ```
 /shellfix                   → 状态面板（编码、规则、日志、同步、git-line-ending）
 /shellfix cmd               → 列出命令替换规则
-/shellfix cmd <name> on/off → 开关规则（export/which/source/touch/rm/chmod）
+/shellfix cmd <name> on/off → 开关规则（export/which/source/touch/rm/chmod/bareEnv）
 /shellfix encoding on/off   → 开关编码注入
 /shellfix log on/off        → 开关日志输出
 /shellfix doctor            → 环境诊断

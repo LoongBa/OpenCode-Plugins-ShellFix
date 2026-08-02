@@ -230,6 +230,28 @@ const PIPE_CMD_RE = /^\s*\|(my|auto)(?:\s|$)/;
 const SLASH_CMD_RE = /^\s*\/(my|auto)(?:\s|$)/;
 
 // ====================================================================
+// V2.2.10 — 命令错误检测正则（PowerShell 中英文报错）
+// ====================================================================
+
+const PS_ERROR_PATTERNS: RegExp[] = [
+  // 中文：无法将"X"项识别为 cmdlet/函数/脚本文件/可运行程序
+  /无法将["'`]([^"'`]+)["'`]\s*项识别为\s*(?:cmdlet|函数|脚本文件|可运行程序)/,
+  // 中文：'X' 不是内部或外部命令
+  /["'`]([^"'`]+)["'`]\s*不是内部或外部命令/,
+  // 中文：找不到路径/文件 X
+  /找不到.*?["'`]([^"'`]+)["'`]/,
+  // 英文：The term 'X' is not recognized as ...
+  /The term ['"`]([^'"`]+)['"`] is not recognized/,
+  // 英文：X: command not found / X: not found
+  /([a-zA-Z_][\w.-]*): (?:command )?not found/,
+  // 英文：Cannot find path/file 'X'
+  /Cannot find (?:path|file) ['"`]([^'"`]+)['"`]/,
+];
+
+/** 裸 VAR=x 行首独立赋值（无 export 前缀） */
+const BARE_ENV_RE = /^\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)$/s;
+
+// ====================================================================
 // 新增命令规则正则
 // ====================================================================
 
@@ -403,6 +425,9 @@ export const ShellFixPlugin: Plugin = async () => {
       if (s.cmdRules.export) {
         result = applyExportRule(result);
       }
+      if (s.cmdRules.bareEnv) {
+        result = applyBareEnvRule(result);
+      }
       if (s.cmdRules.which) {
         result = applyWhichRule(result);
       }
@@ -434,6 +459,52 @@ export const ShellFixPlugin: Plugin = async () => {
       }
 
       out.args.command = result;
+    },
+
+    // ================================================================
+    // 钩子 B2: tool.execute.after — 命令错误检测 + 实时提示（V2.2.10）
+    // ================================================================
+    "tool.execute.after": async (input, output) => {
+      try {
+        const tool = (input as { tool: string }).tool;
+        if (tool !== "bash" && tool !== "pwsh") return;
+
+        const cmd: string | undefined = (input as { args: { command?: string } }).args?.command;
+        if (typeof cmd !== "string") return;
+
+        const resultText: string = (output as { output: string }).output || "";
+        if (!resultText) return;
+
+        // ── 提取失败命令名 ──────────────────────────────────────
+        // 优先从错误文本正则捕获组提取（更准确，如 GIT_MASTER=1）
+        let failedCmd = "";
+        for (const re of PS_ERROR_PATTERNS) {
+          const m = resultText.match(re);
+          if (m && m[1]) {
+            failedCmd = m[1].trim();
+            break;
+          }
+        }
+        // 回退：错误文本命中任一正则但未捕获 → 取命令首 token（去掉编码前缀）
+        if (!failedCmd && PS_ERROR_PATTERNS.some((re) => re.test(resultText))) {
+          const stripped = cmd
+            .replace(/^\s*(?:\$OutputEncoding=[^;]+;\s*)?\[Console\]::OutputEncoding=[^;]+;\s*/, "")
+            .trim();
+          failedCmd = stripped.split(/\s+/)[0] || "";
+        }
+        if (!failedCmd) return;
+
+        // ── 记录错误（去重计次，跨会话累计） ────────────────────
+        addCmdError(failedCmd);
+
+        // ── 实时提示：追加到工具输出末尾（Agent 下一轮立即可见）──
+        const hint = buildErrorHint(failedCmd);
+        if (hint) {
+          (output as { output: string }).output = `${resultText}\n\n${hint}`;
+        }
+      } catch (e) {
+        console.error(`[ShellFix] tool.execute.after error:`, e);
+      }
     },
 
     // ================================================================
@@ -628,6 +699,46 @@ function applyExportRule(cmd: string): string {
   const envAssignments = parseExportKV(kvBlock);
   const result = `${envAssignments.join("")}${suffix ? ` ${suffix}` : ""}`;
   return dedupeEnvAssignments(result);
+}
+
+/** 裸 VAR=x → $env:VAR="x";（仅行首独立赋值，避开比较/参数/命令链歧义） */
+function applyBareEnvRule(cmd: string): string {
+  // 已有 $env: 前缀 → PS 语法，跳过
+  if (/^\s*\$env:/i.test(cmd)) return cmd;
+  // export 前缀 → 走 applyExportRule，跳过
+  if (EXPORT_RE.test(cmd)) return cmd;
+
+  const m = cmd.match(BARE_ENV_RE);
+  if (!m) return cmd;
+
+  const key = m[1];
+  let val = m[2].trim();
+
+  // 歧义排除 1：值含命令链（&& / ; / |）→ 复合命令，不转
+  if (/[&;|]/.test(val)) return cmd;
+  // 歧义排除 2：未加引号且含空格 → 多 token（如 `FOO=hello world`），不转
+  if (/\s/.test(val) && !/^["']/.test(val)) return cmd;
+
+  // 去引号（与 parseExportKV 一致）
+  if (
+    (val.startsWith('"') && val.endsWith('"')) ||
+    (val.startsWith("'") && val.endsWith("'"))
+  ) {
+    val = val.slice(1, -1);
+    val = val.replace(/\\(["\\])/g, "$1");
+  }
+
+  return `$env:${key}="${escapePSDoubleQuoted(val)}";`;
+}
+
+/** 生成命令错误实时提示文本（tool.execute.after 追加到工具输出） */
+function buildErrorHint(failedCmd: string): string {
+  const bareEnvMatch = failedCmd.match(/^([A-Za-z_][A-Za-z0-9_]*)=/);
+  if (bareEnvMatch) {
+    const key = bareEnvMatch[1];
+    return `[ShellFix 提示] 检测到 PowerShell 错误：\`${failedCmd}\` 不是有效命令。\nPowerShell 环境变量赋值请用：$env:${key}="...";`;
+  }
+  return `[ShellFix 提示] 检测到 PowerShell 错误：\`${failedCmd}\` 在 PowerShell 中不存在。\n请使用 PowerShell 等效命令，或执行 /shellfix cmd-errors 查看记录。`;
 }
 
 function applyWhichRule(cmd: string): string {

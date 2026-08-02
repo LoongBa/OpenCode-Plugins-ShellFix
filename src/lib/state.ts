@@ -13,7 +13,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs";
 // 类型定义
 // ====================================================================
 
-export type CmdRuleName = "export" | "which" | "source" | "touch" | "rm" | "chmod" | "head" | "tail";
+export type CmdRuleName = "export" | "which" | "source" | "touch" | "rm" | "chmod" | "head" | "tail" | "bareEnv";
 
 export type AutoMode = "prompt" | "auto" | "silent";
 
@@ -45,12 +45,13 @@ export interface CmdRules {
   chmod: boolean;
   head: boolean;
   tail: boolean;
+  bareEnv: boolean;
 }
 
 /** @deprecated AutoState 已在 PluginState 中移除，由 autoRules/require/autoMode/moduleConditions 替代 */
 
 /** 当前插件版本号（单一事实来源） */
-export const PLUGIN_VERSION = "2.2.9";
+export const PLUGIN_VERSION = "2.2.10";
 
 export interface SyncConfig {
   repoUrl: string;
@@ -147,6 +148,7 @@ export const CMD_RULES_META: CmdRuleMeta[] = [
   { name: "chmod", label: "chmod→warn", description: "chmod → Write-Warning (安全忽略)", defaultOn: false },
   { name: "head", label: "head→Select-Object -First", description: "| head [-n] N → | Select-Object -First N (仅管道后)", defaultOn: true },
   { name: "tail", label: "tail→Select-Object -Last", description: "| tail [-n] N → | Select-Object -Last N (仅管道后，跳过 tail -f)", defaultOn: true },
+  { name: "bareEnv", label: "VAR=x→$env:", description: "裸 VAR=x → $env:VAR=\"x\"（行首独立赋值，避开比较/参数歧义）", defaultOn: true },
 ];
 
 /** 安全提醒模式元信息，供 palette 渲染 */
@@ -185,6 +187,7 @@ const DEFAULT_STATE: PluginState = {
     chmod: false,
     head: true,
     tail: true,
+    bareEnv: true,
   },
   autoMode: "prompt",
   require: "",

@@ -1,5 +1,17 @@
 # Changelog
 
+## v2.2.10 (2026-08-02)
+
+### 新功能 — 命令错误检测激活 + 裸 VAR=x 自动转换
+
+- **错误检测激活**（补上 v2.2.7 缺失的调用点）：新增 `tool.execute.after` 钩子，实时检测 PowerShell 中英文报错
+  - 6 条错误正则：`无法将"X"项识别为 cmdlet/函数/脚本文件/可运行程序`、`"X" 不是内部或外部命令`、`找不到路径/文件 X`、`The term 'X' is not recognized`、`X: command not found`、`Cannot find path/file 'X'`
+  - 命中后调用 `addCmdError()` 记录（跨会话累计 count），并在工具输出末尾追加实时提示 `[ShellFix 提示] ...`
+  - `cmdErrors` 从恒空变为真实记录 → `shellfix.cmd-errors` 面板自动生效，`system.transform` 的 ≥2 次兜底提醒也能触发
+- **裸 `VAR=x` 自动转换**（新命令规则 `cmdRules.bareEnv`，默认 on）：行首独立赋值 `GIT_MASTER=1` → `$env:GIT_MASTER="1";`
+  - 歧义排除：`$env:` 前缀、`export` 前缀、命令含 `=`（`echo a=b`）、比较运算符（`if ($x = 5)`）、参数传递（`cmd --flag k=v`）、命令链（`FOO=1 && make`）均不转换
+  - 与 `applyExportRule` 互补：`export X=1` 走旧规则，裸 `X=1` 走新规则
+
 ## v2.2.9 (2026-07-17)
 
 ### 新功能 — PwshCheck：PowerShell 版本检测引导
