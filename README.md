@@ -313,6 +313,25 @@ warning: in the working copy of 'foo.ts', LF will be replaced by CRLF the next t
 
 ## 快速开始
 
+### 方式一：npm 一键安装（推荐）
+
+```bash
+# 安装（自动加载，重启生效）
+opencode plugin opencode-shellfix
+```
+
+或在 `~/.config/opencode/opencode.json` 中手动添加：
+
+```json
+{
+  "plugin": ["opencode-shellfix"]
+}
+```
+
+> 需 TUI 调度器（palette 入口、事件订阅）？npm 包仅包含核心插件（`shell-fix.ts`）。完整体验请额外部署 TUI 文件（见方式二）。
+
+### 方式二：手动复制
+
 ```bash
 # 1. 创建全局插件目录
 mkdir -p ~/.config/opencode/plugins/

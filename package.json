@@ -1,8 +1,20 @@
 {
-  "dependencies": {
-    "typescript": "^7.0.2"
+  "name": "opencode-shellfix",
+  "version": "2.2.10",
+  "description": "OpenCode Windows PowerShell 修复插件 — 中文不乱码、export→$env: 转换、命令错误检测、Git 免交互",
+  "keywords": ["opencode", "plugin", "powershell", "windows", "shellfix"],
+  "homepage": "https://github.com/LoongBa/OpenCode-Plugins-ShellFix",
+  "bugs": "https://github.com/LoongBa/OpenCode-Plugins-ShellFix/issues",
+  "license": "MIT",
+  "author": "LoongBa (https://loongba.cn)",
+  "type": "module",
+  "main": "src/shell-fix.ts",
+  "files": ["src/"],
+  "publishConfig": {
+    "access": "public"
   },
   "devDependencies": {
-    "@types/node": "^26.1.1"
+    "@types/node": "^26.1.1",
+    "typescript": "^7.0.2"
   }
 }
