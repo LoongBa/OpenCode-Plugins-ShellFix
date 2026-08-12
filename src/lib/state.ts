@@ -55,7 +55,7 @@ export interface CmdRules {
 /** @deprecated AutoState 已在 PluginState 中移除，由 autoRules/require/autoMode/moduleConditions 替代 */
 
 /** 当前插件版本号（单一事实来源） */
-export const PLUGIN_VERSION = "2.2.11";
+export const PLUGIN_VERSION = "2.2.12";
 
 export interface SyncConfig {
   repoUrl: string;
@@ -68,6 +68,8 @@ export interface SyncConfig {
 export interface PwshCheckState {
   pending: boolean;
   dismissed: "pending" | "dismissed" | "forever" | "accepted";
+  /** 自动修复已执行，待 system.transform 一次性通知用户 */
+  notifyAutoFix: boolean;
 }
 
 export interface PluginState {
@@ -75,6 +77,8 @@ export interface PluginState {
   encoding: boolean;
   log: boolean;
   showVersion: boolean;
+  envInject: boolean;
+  autoFixPwsh: boolean;
   cmdRules: CmdRules;
   sync: SyncConfig;
   kickme: KickmeRule[];
@@ -186,6 +190,8 @@ const DEFAULT_STATE: PluginState = {
   encoding: true,
   log: true,
   showVersion: true,
+  envInject: true,
+  autoFixPwsh: true,
   cmdRules: {
     export: true,
     which: false,
@@ -219,7 +225,7 @@ const DEFAULT_STATE: PluginState = {
   cmdErrors: [],
   pendingSafetyWarnings: [],
   safetyCooldowns: {},
-  pwshCheck: { pending: false, dismissed: "pending" },
+  pwshCheck: { pending: false, dismissed: "pending", notifyAutoFix: false },
 };
 
 // ====================================================================
@@ -342,6 +348,22 @@ export function toggleShowVersion(): boolean {
   s.showVersion = !s.showVersion;
   saveState(s);
   return s.showVersion;
+}
+
+/** 切换编码环境变量注入 */
+export function toggleEnvInject(): boolean {
+  const s = loadState();
+  s.envInject = !s.envInject;
+  saveState(s);
+  return s.envInject;
+}
+
+/** 切换 PwshCheck 自动修复 */
+export function toggleAutoFixPwsh(): boolean {
+  const s = loadState();
+  s.autoFixPwsh = !s.autoFixPwsh;
+  saveState(s);
+  return s.autoFixPwsh;
 }
 
 /** 设置自动化模块开关（重定向到 AutoRuleV2） */

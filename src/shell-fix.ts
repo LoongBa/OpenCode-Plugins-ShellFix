@@ -133,7 +133,7 @@ import {
 // BUN 兼容：将所有 require() 提升为顶层 import
 import { execSync } from "child_process";
 import * as os from "os";
-import { existsSync, readFileSync, readdirSync } from "fs";
+import { existsSync, readFileSync, readdirSync, writeFileSync, copyFileSync } from "fs";
 import { join } from "path";
 
 // ====================================================================
@@ -327,7 +327,7 @@ export const ShellFixPlugin: Plugin = async () => {
     );
   }
 
-  // ── PwshCheck：检测 OpenCode 是否使用 PowerShell 5.1（v2.2.9）────
+  // ── PwshCheck：检测 OpenCode 是否使用 PowerShell 5.1（v2.2.12 升级为自动修复）──
   if (process.platform === "win32" && state.pwshCheck.dismissed !== "forever") {
     try {
       const configPath = join(os.homedir(), ".config", "opencode", "opencode.jsonc");
@@ -347,8 +347,36 @@ export const ShellFixPlugin: Plugin = async () => {
             pwshFound = true;
           } catch { /* pwsh 未安装 */ }
           if (pwshFound) {
-            state.pwshCheck.pending = true;
-            saveState(state);
+            if (state.autoFixPwsh) {
+              // 自动修复：修改 opencode.jsonc，设置 "shell": "pwsh"
+              try {
+                let newContent = content;
+                if (/"shell"\s*:\s*"[^"]*"/.test(newContent)) {
+                  newContent = newContent.replace(/"shell"\s*:\s*"[^"]*"/, '"shell": "pwsh"');
+                } else {
+                  newContent = newContent.replace(
+                    /("\$schema"\s*:\s*"[^"]*")/,
+                    '$1,\n  "shell": "pwsh"'
+                  );
+                }
+                // 备份原文件（仅首次）
+                const backupPath = configPath + ".shellfix.bak";
+                if (!existsSync(backupPath)) {
+                  copyFileSync(configPath, backupPath);
+                }
+                writeFileSync(configPath, newContent, "utf-8");
+                state.pwshCheck.pending = false;
+                state.pwshCheck.dismissed = "accepted";
+                state.pwshCheck.notifyAutoFix = true;
+                saveState(state);
+              } catch (e) {
+                console.error(`[ShellFix] PwshCheck auto-fix failed:`, e);
+              }
+            } else {
+              // 传统模式：设置 pending，由 system.transform 提示
+              state.pwshCheck.pending = true;
+              saveState(state);
+            }
           }
         }
       }
@@ -367,6 +395,12 @@ export const ShellFixPlugin: Plugin = async () => {
       // 基础 Git 免交互环境变量
       for (const [key, val] of Object.entries(CI_ENV_VARS)) {
         out.env[key] = val;
+      }
+      // env-inject (v2.2.12): 编码环境变量，让 Python/Node/less 等子进程输出 UTF-8
+      if (s.envInject) {
+        out.env["PYTHONUTF8"] = "1";
+        out.env["PYTHONIOENCODING"] = "utf-8";
+        out.env["LESSCHARSET"] = "utf-8";
       }
       // git-line-ending: 条件注入 Git 配置环境变量（抑制换行符警告）
       if (s.gitLineEnding !== "off") {
@@ -616,7 +650,15 @@ export const ShellFixPlugin: Plugin = async () => {
         clearPendingSafetyWarnings();
       }
 
-      // PwshCheck（v2.2.9）：检测到 PS 5.1 且未配置 pwsh，引导 Agent 询问用户
+      // PwshCheck（v2.2.12）：自动修复通知 + 传统提示
+      if (s.pwshCheck.notifyAutoFix) {
+        out.content += `\n\n---\n\n[ShellFix 系统配置]
+检测到 OpenCode 当前使用 Windows PowerShell 5.1。
+已自动修复：将 opencode.jsonc 中 "shell" 设为 "pwsh"，重启后生效。
+如需还原，请执行 /shellfix pwsh off。`;
+        s.pwshCheck.notifyAutoFix = false;
+        saveState(s);
+      }
       const pwshPending = s.pwshCheck.pending && s.pwshCheck.dismissed === "pending";
       if (pwshPending) {
         out.content += `\n\n---\n\n[ShellFix 系统配置]

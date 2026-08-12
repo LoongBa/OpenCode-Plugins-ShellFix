@@ -67,6 +67,7 @@ import {
   setCmdRule,
   toggleEncoding,
   toggleLog,
+  toggleEnvInject,
   CMD_RULES_META,
   setAutoModule,
   setAutoMode,
@@ -79,6 +80,7 @@ import {
   clearModuleConditions,
   PLUGIN_VERSION,
   toggleShowVersion,
+  toggleAutoFixPwsh,
   getKickmeRules,
   type CmdRuleName,
   type AutoMode,
@@ -572,6 +574,24 @@ const tui: TuiPlugin = async (api, _options, _meta) => {
         namespace: "palette",
         run() {
           try { showGitLineEnding(api); } catch (e) { console.error(`[ShellFix] palette error (shellfix.git-eol):`, e); }
+        },
+      },
+      {
+        name: "shellfix.env-inject",
+        title: `ShellFix env-inject 编码环境变量`,
+        category: SHELLFIX_CATEGORY,
+        namespace: "palette",
+        run() {
+          try { showToggleInfo(api, "env-inject", toggleEnvInject); } catch (e) { console.error(`[ShellFix] palette error (shellfix.env-inject):`, e); }
+        },
+      },
+      {
+        name: "shellfix.pwsh",
+        title: `ShellFix pwsh 自动切换 PS7`,
+        category: SHELLFIX_CATEGORY,
+        namespace: "palette",
+        run() {
+          try { showToggleInfo(api, "pwsh", toggleAutoFixPwsh); } catch (e) { console.error(`[ShellFix] palette error (shellfix.pwsh):`, e); }
         },
       },
       {
@@ -1072,6 +1092,8 @@ const TOGGLE_META: Record<string, { label: string; desc: string; stateKey?: stri
   encoding: { label: "编码注入", desc: "每条命令前自动注入 UTF-8 编码设置，解决中文乱码" },
   log: { label: "日志", desc: "开关控制台日志输出，用于调试" },
   banner: { label: "启动版本信息", desc: "OpenCode 启动时显示 ShellFix vX.X.X loaded", stateKey: "showVersion" },
+  "env-inject": { label: "编码环境变量", desc: "注入 PYTHONUTF8=1、PYTHONIOENCODING=utf-8、LESSCHARSET=utf-8，让 Python/Node/less 等子进程输出 UTF-8", stateKey: "envInject" },
+  pwsh: { label: "自动切换 PS7", desc: "检测到 PowerShell 5.1 时自动修改 opencode.jsonc 切换为 pwsh，从根本上解决编码问题", stateKey: "autoFixPwsh" },
 };
 
 function showToggleInfo(api: any, key: string, toggleFn: () => boolean): void {
@@ -1176,6 +1198,8 @@ function showShellFixStatus(api: any): void {
     `  log            ${s.log ? "ON" : "OFF"}`,
     `  git-env        16 env vars`,
     `  git-eol        ${s.gitLineEnding === "auto" ? "AUTO" : s.gitLineEnding === "config" ? "CONFIG" : "OFF"}`,
+    `  env-inject     ${s.envInject ? "ON" : "OFF"}`,
+    `  pwsh           ${s.autoFixPwsh ? "AUTO" : "OFF"}`,
     `  kickme         ${kickmeRules.length} rules (${enabledKickme} on)`,
     `  banner         ${s.showVersion !== false ? "ON" : "OFF"}`,
   ];
@@ -1362,6 +1386,8 @@ function showShellFixHelp(api: any): void {
     `shellfix.log       log 记录操作信息`,
     `shellfix.git-env     git-env 避免等待交互`,
     `shellfix.git-eol    git-eol 避免换行警告`,
+    `shellfix.env-inject  env-inject 编码环境变量`,
+    `shellfix.pwsh       pwsh 自动切换 PS7`,
     `shellfix.sysinfo    sysinfo 查看系统信息`,
     `shellfix.about     about 版本与更新`,
     `shellfix.help      help 命令参考`,

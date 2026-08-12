@@ -1,5 +1,20 @@
 # Changelog
 
+## v2.2.12 (2026-08-13)
+
+### 新功能 — 编码环境变量注入 + PwshCheck 自动修复
+
+- **编码环境变量注入**（新开关 `envInject`，默认 true）：在 `shell.env` 钩子中追加注入 `PYTHONUTF8=1`、`PYTHONIOENCODING=utf-8`、`LESSCHARSET=utf-8`，让 Python/Node/less 等子进程输出 UTF-8，从源头避免中文乱码
+  - 子进程自动继承，零命令污染（与 CI_ENV_VARS 同机制）
+  - TUI 入口：`shellfix.env-inject` palette 命令，状态面板显示 env-inject 行
+- **PwshCheck 自动修复**（新开关 `autoFixPwsh`，默认 true）：检测到 PS 5.1 且 pwsh 已安装时，自动修改 `opencode.jsonc` 将 `"shell"` 设为 `"pwsh"`，无需 Agent 询问用户
+  - 修改前备份原文件到 `opencode.jsonc.shellfix.bak`（仅首次）
+  - 支持已有 `"shell"` 字段替换 / 无字段时在 `$schema` 后插入（纯正则，兼容 JSONC 注释）
+  - 修复后通过 `system.transform` 一次性通知用户（`notifyAutoFix` 标记）
+  - `autoFixPwsh=false` 时回退传统模式（system.transform 提示 Agent 询问）
+  - TUI 入口：`shellfix.pwsh` palette 命令，状态面板显示 pwsh 行
+- **P2/P3 推迟记录**：chcp .cmd 包装脚本（文章方案）与前缀 chcp 65001 均记录在开发方案中，推迟决策
+
 ## v2.2.11 (2026-08-13)
 
 ### 新功能 — 输入编码修复 + 命令映射扩展
