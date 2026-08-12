@@ -2,7 +2,7 @@
 
 **Windows PowerShell 三大修复 + 六命令体系**
 
-当前版本：**v2.2.10**
+当前版本：**v2.2.11**
 
 ---
 
@@ -73,12 +73,12 @@ git commit -m "fix"
 每条命令前自动注入 UTF-8 编码设置：
 
 ```powershell
-$OutputEncoding=[Console]::OutputEncoding=[Text.Encoding]::UTF8;
+$OutputEncoding=[Console]::OutputEncoding=[Console]::InputEncoding=[Text.Encoding]::UTF8;
 ```
 
-PowerShell 非交互子进程默认输出编码为系统代码页（Windows 常见 GBK），导致中文乱码。插件强制设置管道和控制台编码为 UTF-8。
+PowerShell 非交互子进程默认输出编码为系统代码页（Windows 常见 GBK），导致中文乱码。插件强制设置管道、控制台和输入编码为 UTF-8 —— 既防输出乱码，也防命令字符串中的中文路径传输损坏。
 
-> 优化：v2.1.1 将前缀从 120 字符压缩至 69 字符（-42%），v2.2.8 再压缩至 64 字符，pwsh 7+ 跳过 `$OutputEncoding` 进一步减至 51 字符。
+> 优化：v2.1.1 将前缀从 120 字符压缩至 69 字符（-42%），v2.2.8 再压缩至 64 字符，v2.2.11 追加 `[Console]::InputEncoding` 增至 91 字符（输入+输出双保险）。
 
 ### ② export → $env: 自动转换
 
@@ -106,6 +106,18 @@ Agent 生成的 Linux export 语法被自动转换为 PowerShell 兼容写法：
 - 记录到命令错误日志（`/shellfix cmd-errors` 可查看，跨会话累计次数）
 - 在工具输出末尾追加实时提示 `[ShellFix 提示] ...`，Agent 下一轮立即可见
 - 多次失败（≥2 次）还会通过 system prompt 注入兜底提醒
+
+**`mkdir -p` 自动转换**（v2.2.11，`cmdRules.mkdir` 默认 on）：`mkdir -p foo/bar` → `New-Item -ItemType Directory -Force -Path 'foo/bar'`。排除多路径、非行首。
+
+**`cat` / `grep` / `find` 单命令映射**（v2.2.11，`cmdRules.cat`/`grep`/`find` 默认 off）：
+
+| Agent 输出 | 插件转换后 |
+|-----------|-----------|
+| `cat file.txt` | `Get-Content -Path 'file.txt' -Encoding UTF8` |
+| `grep "hello world" file.txt` | `Select-String -Pattern 'hello world' -Path 'file.txt'` |
+| `find . -name "*.ts"` | `Get-ChildItem -Path '.' -Recurse -Filter '*.ts'` |
+
+> 排除管道/重定向（`cat`）、复杂参数如 `-r`（`grep`）、非 `-name` 模式（`find`）。默认关闭，按需启用。
 
 ### ③ Git 免交互，避免官方插件的啰嗦和浪费
 
@@ -188,7 +200,7 @@ warning: in the working copy of 'foo.ts', LF will be replaced by CRLF the next t
 ```
 /shellfix                   → 状态面板（编码、规则、日志、同步、git-line-ending）
 /shellfix cmd               → 列出命令替换规则
-/shellfix cmd <name> on/off → 开关规则（export/which/source/touch/rm/chmod/bareEnv）
+/shellfix cmd <name> on/off → 开关规则（export/which/source/touch/rm/chmod/bareEnv/mkdir/cat/grep/find）
 /shellfix encoding on/off   → 开关编码注入
 /shellfix log on/off        → 开关日志输出
 /shellfix doctor            → 环境诊断

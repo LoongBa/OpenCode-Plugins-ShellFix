@@ -200,10 +200,10 @@ const EXPORT_LINE_RE =
   /^\s*export\s+((?:\w+=(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\S+)\s*)+)(.*)$/s;
 
 const ENCODING_PREFIX_PS =
-  "$OutputEncoding=[Console]::OutputEncoding=[Text.Encoding]::UTF8;";
-/** PowerShell 7+ (pwsh) — $OutputEncoding 默认为 UTF8，只需设 Console */
+  "$OutputEncoding=[Console]::OutputEncoding=[Console]::InputEncoding=[Text.Encoding]::UTF8;";
+/** PowerShell 7+ (pwsh) — $OutputEncoding 默认为 UTF8，只需设 Console 输入输出 */
 const ENCODING_PREFIX_PWSH =
-  "[Console]::OutputEncoding=[Text.Encoding]::UTF8;";
+  "[Console]::OutputEncoding=[Console]::InputEncoding=[Text.Encoding]::UTF8;";
 
 const PLUGIN_NAME = "ShellFix";
 
@@ -250,6 +250,15 @@ const PS_ERROR_PATTERNS: RegExp[] = [
 
 /** 裸 VAR=x 行首独立赋值（无 export 前缀） */
 const BARE_ENV_RE = /^\s*([A-Za-z_][A-Za-z0-9_]*)=(.*)$/s;
+
+// ====================================================================
+// V2.2.11 — 命令映射正则
+// ====================================================================
+
+const MKDIR_P_RE = /^\s*mkdir\s+-p\s+(.+)$/;
+const CAT_RE = /^\s*cat\s+(.+)$/;
+const GREP_RE = /^\s*grep\s+("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|\S+)\s+(.+)$/;
+const FIND_NAME_RE = /^\s*find\s+(\S+)\s+-name\s+['"](.+?)['"]\s*$/;
 
 // ====================================================================
 // 新增命令规则正则
@@ -428,6 +437,18 @@ export const ShellFixPlugin: Plugin = async () => {
       if (s.cmdRules.bareEnv) {
         result = applyBareEnvRule(result);
       }
+      if (s.cmdRules.mkdir) {
+        result = applyMkdirRule(result);
+      }
+      if (s.cmdRules.cat) {
+        result = applyCatRule(result);
+      }
+      if (s.cmdRules.grep) {
+        result = applyGrepRule(result);
+      }
+      if (s.cmdRules.find) {
+        result = applyFindRule(result);
+      }
       if (s.cmdRules.which) {
         result = applyWhichRule(result);
       }
@@ -454,7 +475,7 @@ export const ShellFixPlugin: Plugin = async () => {
       if (s.encoding &&
           !result.startsWith(ENCODING_PREFIX_PS) &&
           !result.startsWith(ENCODING_PREFIX_PWSH) &&
-          !/^\s*(?:\$z=\[Text\.Encoding\]|\[Console\]::OutputEncoding\s*=|\[System\.Text\.UTF8Encoding\]|\$OutputEncoding\s*=)/i.test(result)) {
+          !/^\s*(?:\$z=\[Text\.Encoding\]|\[Console\]::OutputEncoding\s*=|\[Console\]::InputEncoding\s*=|\[System\.Text\.UTF8Encoding\]|\$OutputEncoding\s*=)/i.test(result)) {
         result = `${ENCODING_PREFIX_PS}${result}`;
       }
 
@@ -488,7 +509,7 @@ export const ShellFixPlugin: Plugin = async () => {
         // 回退：错误文本命中任一正则但未捕获 → 取命令首 token（去掉编码前缀）
         if (!failedCmd && PS_ERROR_PATTERNS.some((re) => re.test(resultText))) {
           const stripped = cmd
-            .replace(/^\s*(?:\$OutputEncoding=[^;]+;\s*)?\[Console\]::OutputEncoding=[^;]+;\s*/, "")
+            .replace(/^\s*(?:(?:\$OutputEncoding|\[Console\]::OutputEncoding|\[Console\]::InputEncoding)=[^;]+;\s*)+/, "")
             .trim();
           failedCmd = stripped.split(/\s+/)[0] || "";
         }
@@ -773,6 +794,54 @@ function applyTailRule(cmd: string): string {
     const n = num ? parseInt(num, 10) : 10;
     return `${pipePrefix}Select-Object -Last ${n}`;
   });
+}
+
+// ====================================================================
+// V2.2.11 — 命令映射规则实现
+// ====================================================================
+
+/** 剥离外层成对引号（"x" 或 'x'），其余原样返回 */
+function stripOuterQuotes(s: string): string {
+  const t = s.trim();
+  if (
+    (t.startsWith('"') && t.endsWith('"')) ||
+    (t.startsWith("'") && t.endsWith("'"))
+  ) {
+    return t.slice(1, -1);
+  }
+  return t;
+}
+
+function applyMkdirRule(cmd: string): string {
+  return cmd.replace(MKDIR_P_RE, (m, path: string) => {
+    const raw = path.trim();
+    // 多路径（未引号且含空格）→ 不转换
+    if (/\s/.test(raw) && !/^["']/.test(raw)) return m;
+    return `New-Item -ItemType Directory -Force -Path '${stripOuterQuotes(raw)}'`;
+  });
+}
+
+function applyCatRule(cmd: string): string {
+  return cmd.replace(CAT_RE, (m, path: string) => {
+    const raw = path.trim();
+    // 管道/重定向/命令链 → 不转换
+    if (/[|>;]/.test(raw)) return m;
+    return `Get-Content -Path '${stripOuterQuotes(raw)}' -Encoding UTF8`;
+  });
+}
+
+function applyGrepRule(cmd: string): string {
+  return cmd.replace(GREP_RE, (m, pattern: string, file: string) => {
+    const p = pattern.trim();
+    // 复杂参数（-i/-r 等）→ 不转换
+    if (p.startsWith("-")) return m;
+    return `Select-String -Pattern '${stripOuterQuotes(p)}' -Path '${stripOuterQuotes(file)}'`;
+  });
+}
+
+function applyFindRule(cmd: string): string {
+  return cmd.replace(FIND_NAME_RE, (_m, dir: string, name: string) =>
+    `Get-ChildItem -Path '${stripOuterQuotes(dir)}' -Recurse -Filter '${name}'`);
 }
 
 // ====================================================================

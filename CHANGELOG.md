@@ -1,5 +1,23 @@
 # Changelog
 
+## v2.2.11 (2026-08-13)
+
+### 新功能 — 输入编码修复 + 命令映射扩展
+
+- **输入编码修复**：编码前缀追加 `[Console]::InputEncoding=[Text.Encoding]::UTF8`，修复命令字符串中的中文（路径/字符串）经 stdin 传输时按 GBK 解码导致的字节错位 → ParserError
+  - PS 前缀：`$OutputEncoding=[Console]::OutputEncoding=[Console]::InputEncoding=[Text.Encoding]::UTF8;`
+  - pwsh 前缀：`[Console]::OutputEncoding=[Console]::InputEncoding=[Text.Encoding]::UTF8;`
+  - 与输出编码共享 `s.encoding` 开关，无独立 toggle
+  - guard regex（行 457）防御性补充 `[Console]::InputEncoding\s*=` 分支
+  - stripping regex（行 491）改为宽容匹配，覆盖新旧 4 种前缀变体（修复原正则对 PS 前缀剥离失败的隐藏缺陷）
+- **`mkdir -p` 自动转换**（新命令规则 `cmdRules.mkdir`，默认 on）：`mkdir -p foo/bar` → `New-Item -ItemType Directory -Force -Path 'foo/bar'`
+  - 排除：不带 `-p`、多路径（未引号含空格）、非行首
+- **`cat` / `grep` / `find` 单命令映射**（新命令规则，默认 off）：
+  - `cmdRules.cat`：`cat file` → `Get-Content -Path 'file' -Encoding UTF8`（排除管道/重定向/命令链）
+  - `cmdRules.grep`：`grep pattern file` → `Select-String -Pattern 'pattern' -Path 'file'`（支持引号模式，排除 `-r` 等复杂参数）
+  - `cmdRules.find`：`find path -name "*.ts"` → `Get-ChildItem -Path 'path' -Recurse -Filter '*.ts'`（仅 `-name` 模式）
+  - 统一 `stripOuterQuotes()` 剥离捕获路径/模式的成对引号，避免 `-Path '"foo bar"'` 引号成为路径的一部分
+
 ## v2.2.10 (2026-08-02)
 
 ### 新功能 — 命令错误检测激活 + 裸 VAR=x 自动转换
