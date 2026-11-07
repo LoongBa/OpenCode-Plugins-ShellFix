@@ -55,7 +55,7 @@ export interface CmdRules {
 /** @deprecated AutoState 已在 PluginState 中移除，由 autoRules/require/autoMode/moduleConditions 替代 */
 
 /** 当前插件版本号（单一事实来源） */
-export const PLUGIN_VERSION = "2.2.12";
+export const PLUGIN_VERSION = "2.3.0";
 
 export interface SyncConfig {
   repoUrl: string;
@@ -70,6 +70,23 @@ export interface PwshCheckState {
   dismissed: "pending" | "dismissed" | "forever" | "accepted";
   /** 自动修复已执行，待 system.transform 一次性通知用户 */
   notifyAutoFix: boolean;
+}
+
+/** CodeMap 索引运行模式 */
+export type CodemapRunMode = "built" | "cached" | "failed" | "skipped";
+
+/** CodeMap 最近一次运行摘要（持久化：重启后冷却判断 + 状态面板） */
+export interface CodemapRunInfo {
+  at: string;
+  repo: string;
+  mode: CodemapRunMode;
+  elapsedMs: number;
+  symbols: number;
+  sha: string;
+  workspaceId: string;
+  error?: string;
+  consecutiveFailures: number;
+  lastCleanupAt?: string;
 }
 
 export interface PluginState {
@@ -93,6 +110,8 @@ export interface PluginState {
   pendingSafetyWarnings: SafetyWarnEntry[];
   safetyCooldowns: Record<string, number>;
   pwshCheck: PwshCheckState;
+  codemapIndex: boolean;
+  codemapLast: CodemapRunInfo | null;
 }
 
 export interface CmdErrorEntry {
@@ -226,6 +245,8 @@ const DEFAULT_STATE: PluginState = {
   pendingSafetyWarnings: [],
   safetyCooldowns: {},
   pwshCheck: { pending: false, dismissed: "pending", notifyAutoFix: false },
+  codemapIndex: true,
+  codemapLast: null,
 };
 
 // ====================================================================
@@ -797,6 +818,25 @@ export function setPwshCheckDismissed(mode: "dismissed" | "forever"): void {
 }
 
 // ====================================================================
+// CodeMap 索引自动化（v2.3.0）
+// ====================================================================
+
+/** 切换 CodeMap 索引自动化总开关，返回新状态 */
+export function toggleCodemapIndex(): boolean {
+  const s = loadState();
+  s.codemapIndex = !s.codemapIndex;
+  saveState(s);
+  return s.codemapIndex;
+}
+
+/** 写入最近一次 CodeMap 运行摘要（null 表示清空） */
+export function setCodemapLast(info: CodemapRunInfo | null): void {
+  const s = loadState();
+  s.codemapLast = info;
+  saveState(s);
+}
+
+// ====================================================================
 // 内部工具
 // ====================================================================
 
@@ -804,8 +844,12 @@ function deepMerge<T extends Record<string, any>>(base: T, override: Partial<T>)
   const result = { ...base };
   for (const key of Object.keys(override) as (keyof T)[]) {
     const val = override[key];
-    if (val !== undefined && val !== null) {
-      if (typeof val === "object" && !Array.isArray(val) && typeof base[key] === "object") {
+    if (val === null) {
+      (result as Record<string, unknown>)[key as string] = null;
+      continue;
+    }
+    if (val !== undefined) {
+      if (typeof val === "object" && !Array.isArray(val) && typeof base[key] === "object" && base[key] !== null) {
         result[key] = { ...(base[key] as any), ...(val as any) };
       } else {
         result[key] = val as T[keyof T];

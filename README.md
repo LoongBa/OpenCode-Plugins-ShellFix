@@ -1,8 +1,8 @@
 # OpenCode Plugins ShellFix 🔧
 
-**Windows PowerShell 三大修复 + 六命令体系**
+**Windows PowerShell 三大修复 + 七命令体系**
 
-当前版本：**v2.2.12**
+当前版本：**v2.3.0**
 
 ---
 
@@ -79,6 +79,27 @@ $OutputEncoding=[Console]::OutputEncoding=[Console]::InputEncoding=[Text.Encodin
 PowerShell 非交互子进程默认输出编码为系统代码页（Windows 常见 GBK），导致中文乱码。插件强制设置管道、控制台和输入编码为 UTF-8 —— 既防输出乱码，也防命令字符串中的中文路径传输损坏。
 
 > 优化：v2.1.1 将前缀从 120 字符压缩至 69 字符（-42%），v2.2.8 再压缩至 64 字符，v2.2.11 追加 `[Console]::InputEncoding` 增至 91 字符（输入+输出双保险）。
+
+#### 解决思路对比：为什么选 ShellFix
+
+中文乱码的根源是 opencode 用 `cross-spawn` 以 `pwsh -NoProfile` 启动子进程，跳过了 profile 丢失 UTF-8 设置。业界有四种解决思路，各有取舍：
+
+| 思路 | 做法 | 生效范围 | 缺点 | 开箱即用 |
+|------|------|----------|------|---------|
+| **ShellFix 前缀注入**（本插件） | 每条命令自动注入 `[Console]::OutputEncoding=UTF8` | 仅 ShellFix 处理的命令 | 命令字符串变长（91 字符前缀） | ✅ 安装即用 |
+| CMD Wrapper（Profile 型） | 过滤 `-NoProfile`，让用户自己的 profile 加载 | opencode 内所有命令 | 必须用户事先配好 profile（含 UTF-8 设置）；换机需重配 | ❌ 需手写 .cmd + 改配置 |
+| CMD Wrapper（编码注入型） | `.cmd` → `.ps1` 链，注入 `chcp 65001` + 编码设置 | opencode 内所有命令 | `.ps1` 用 `Invoke-Expression` 有注入风险；额外进程链；换机需重配 | ❌ 需手写 .cmd + .ps1 + 改配置 |
+| `powershell.config.json` | 设置 `Console:Encoding: utf-8` | 仅 PowerShell 7 | 只改 `$OutputEncoding`，够不到 `[Console]::OutputEncoding` | ❌ 不够用 |
+| 注册表 `OEMCP=65001` | 全局代码页改 UTF-8 | 所有进程 | 依赖 GBK 的旧软件乱码 | ❌ 有全局风险 |
+
+> 完整排查过程与三种方案实测对比 → [`docs/05-中文乱码排查记录.md`](docs/05-中文乱码排查记录.md)
+
+**ShellFix 的优势：**
+
+- **零配置零依赖**：安装插件即生效，不碰 profile、不碰注册表、不写 wrapper
+- **不依赖 profile**：`-NoProfile` 下同样生效（前缀直接塞进命令字符串）
+- **无全局副作用**：只影响自己的命令，不波及系统其他软件
+- **自动兜底**：还能顺带处理输入编码 `[Console]::InputEncoding`（v2.2.11）
 
 ### ② export → $env: 自动转换
 
@@ -176,7 +197,26 @@ warning: in the working copy of 'foo.ts', LF will be replaced by CRLF the next t
 
 ---
 
-## 六命令体系：V2内测
+### ⑤ CodeMap 索引自动化（v2.3.0）
+
+在 .NET 仓库中，插件自行维护 CodeMap 语义索引，让 Agent 的 `codemap_*` 工具随取随用，无需每次手工 `index_ensure_baseline`：
+
+| 时机 | 动作 |
+|------|------|
+| 会话开始（`session.created`） | 幂等 `ensure_baseline`（已索引秒回）+ `workspace.create` |
+| `dotnet build` 成功 | 强制重建索引（优先于其他时机） |
+| 编辑 `.cs` 文件 | 5s 防抖后 `refresh_overlay` |
+| `~/.codemap` >1GB | 间隔 ≥24h 清理旧 baseline（keep_count=3 / 14 天，freed ≥100MB 才实删） |
+
+- 仅 `.slnx/.sln/.csproj` 仓库触发，非 .NET 项目零开销
+- 成功 log 一行（repo / elapsed / 符号数）；失败静默，连续失败 ≥3 次才一次性提醒
+- 开关 `codemapIndex`（默认 ON）：`/shellfix codemap` 或 palette `shellfix.codemap`；palette `shellfix.codemap-run` 立即重建
+- 命令 `/codemap-index [status|cleanup]`：无参数=重建并刷新，`status`=索引状态，`cleanup`=清理旧 baseline
+- 底层直连 `codemap-mcp.exe`（stdio JSON-RPC），零运行时依赖；`SHELLFIX_CODEMAP_MCP` 可指定可执行文件路径
+
+---
+
+## 七命令体系：V2内测
 
 除四大修复外，还提供 6 个命令，所有命令**优先在 TUI 侧本地处理**，零 LLM 成本。
 
@@ -188,6 +228,7 @@ warning: in the working copy of 'foo.ts', LF will be replaced by CRLF the next t
 | `/auto`     | 自动化系统 | 自动注入上下文到 system prompt |
 | `/kickme`   | 通知系统   | 关键词匹配时弹 toast 通知      |
 | `/dynamic`  | 动态上下文 | 关键词触发时自动注入上下文     |
+| `/codemap-index` | 索引维护 | .NET 仓库语义索引重建/状态/清理（v2.3.0） |
 
 所有命令同时支持 palette 操作（`Ctrl+P` → 搜索命令名）。
 

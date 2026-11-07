@@ -192,3 +192,24 @@ event?: (input: { event: Event }) => Promise<void>;
 1. **短期（v1.9）：** 保持当前 `pendingDynamic` + `system.transform` 方案，已验证可靠
 2. **中期（v2.0）：** 实验 `chat.message` 的 `output.parts` 修改能力，如果可行则迁移到更优雅的方案
 3. **长期：** 利用 `experimental.chat.messages.transform` 实现更复杂的消息注入逻辑
+
+---
+
+## 六、命令输入路径语义补记
+
+调试 `/my` `/auto` 重复菜单与「手敲 `|my` 无反应」时确认的路径语义：
+
+| 用户输入 | 触发的链路 | 拦截方 | 结果 |
+|---|---|---|---|
+| 菜单选中 `/my`（TUI `slashName`） | TUI keymap → `run()` | TUI 本地处理器 | 本地输出 / `appendPrompt` 填输入框，零 LLM |
+| 手动输入 `/my ?` | config `command.my` → `command.execute.before` | 核心插件 | 本地处理，替换命令 parts |
+| 手动输入 `\|my ?` | 普通用户消息 | **无钩子** | 原样发给模型（`\|`/`/` 前缀拦截只在 `tool.execute.before`，仅覆盖 Agent 调 bash 工具） |
+| Agent 执行 bash `\|my ?` / `/my ?` | `tool.execute.before` | 核心插件 | 改写为 `Write-Host` 本地输出 |
+
+补充结论：
+
+1. **TUI `slashName` 不是真正的斜杠命令注册**：它只提供菜单项，手动输入的 `/my` 不会被它识别；真正的斜杠命令来自 config `command`（或插件 `config` 钩子动态注册）。
+2. **唯一注册来源**：`shell-fix.ts` 钩子 0b（`config`）自注册 `codemap-index` / `my` / `auto`，用户 `opencode.jsonc` 中不要再写 `command.my/auto`，TUI palette 项也不再带 `slashName`，否则菜单出现两条。
+3. **`client.tui.appendPrompt` 参数形状**：SDK 为 `{ body: { text } }`（`/tui/append-prompt`），写成 `{ text }` 会 400。
+4. **`appendPrompt` 作用域**：只填充 TUI 当前活动会话的输入框；并行/子会话场景可能填入后无法提交。
+5. **`codemap-mcp` 路径要求**：`index.refresh_overlay` 的 `file_paths` 必须是正斜杠（Windows 反斜杠 → `INVALID_ARGUMENT: FilePath must use forward slashes only`）。

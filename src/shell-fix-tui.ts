@@ -100,7 +100,8 @@ import {
   getPendingSafetyWarnings,
   clearPendingSafetyWarnings,
   type SafetyWarnEntry,
-} from "./lib/state";
+  toggleCodemapIndex,
+} from "../plugins/lib/state";
 
 import {
   listTemplates,
@@ -110,13 +111,13 @@ import {
   listNotes,
   getNote,
   saveNote,
-} from "./lib/template-store";
+} from "../plugins/lib/template-store";
 
 import {
   AUTO_MODULES,
   getAutoModule,
   getDefaultEnabledModules,
-} from "./lib/auto-rules";
+} from "../plugins/lib/auto-rules";
 
 /** ShellFix palette 分组标题（唯一显示版本号的地方） */
 const SHELLFIX_CATEGORY = `ShellFix v${PLUGIN_VERSION}`;
@@ -595,6 +596,24 @@ const tui: TuiPlugin = async (api, _options, _meta) => {
         },
       },
       {
+        name: "shellfix.codemap",
+        title: `ShellFix codemap 语义索引自动化`,
+        category: SHELLFIX_CATEGORY,
+        namespace: "palette",
+        run() {
+          try { showToggleInfo(api, "codemap", toggleCodemapIndex); } catch (e) { console.error(`[ShellFix] palette error (shellfix.codemap):`, e); }
+        },
+      },
+      {
+        name: "shellfix.codemap-run",
+        title: `ShellFix codemap-run 立即重建索引`,
+        category: SHELLFIX_CATEGORY,
+        namespace: "palette",
+        run() {
+          try { runCodemapIndexCommand(api); } catch (e) { console.error(`[ShellFix] palette error (shellfix.codemap-run):`, e); }
+        },
+      },
+      {
         name: "shellfix.kickme",
         title: `ShellFix kickme 关键词通知`,
         category: SHELLFIX_CATEGORY,
@@ -664,7 +683,6 @@ const tui: TuiPlugin = async (api, _options, _meta) => {
         title: "ShellFix my 预设文本模板",
         category: SHELLFIX_CATEGORY,
         namespace: "palette",
-        slashName: "my",
         run() {
           try { showTemplateSystem(api); } catch (e) { console.error(`[ShellFix] palette error (shellfix.my):`, e); }
         },
@@ -685,7 +703,6 @@ const tui: TuiPlugin = async (api, _options, _meta) => {
         title: "ShellFix auto 自动注入上下文",
         category: SHELLFIX_CATEGORY,
         namespace: "palette",
-        slashName: "auto",
         run() {
           try { showAutoSystem(api); } catch (e) { console.error(`[ShellFix] palette error (shellfix.auto):`, e); }
         },
@@ -1094,6 +1111,7 @@ const TOGGLE_META: Record<string, { label: string; desc: string; stateKey?: stri
   banner: { label: "启动版本信息", desc: "OpenCode 启动时显示 ShellFix vX.X.X loaded", stateKey: "showVersion" },
   "env-inject": { label: "编码环境变量", desc: "注入 PYTHONUTF8=1、PYTHONIOENCODING=utf-8、LESSCHARSET=utf-8，让 Python/Node/less 等子进程输出 UTF-8", stateKey: "envInject" },
   pwsh: { label: "自动切换 PS7", desc: "检测到 PowerShell 5.1 时自动修改 opencode.jsonc 切换为 pwsh，从根本上解决编码问题", stateKey: "autoFixPwsh" },
+  codemap: { label: "CodeMap 索引", desc: "会话开始 / dotnet build 成功后自动建立语义索引，编辑 .cs 后自动刷新 overlay（仅 .NET 仓库）", stateKey: "codemapIndex" },
 };
 
 function showToggleInfo(api: any, key: string, toggleFn: () => boolean): void {
@@ -1122,6 +1140,27 @@ function showToggleInfo(api: any, key: string, toggleFn: () => boolean): void {
   } catch (e) {
     console.error(`[ShellFix] showToggleInfo error:`, e);
   }
+}
+
+function formatCodemapState(s: any): string {
+  if (!s?.codemapIndex) return "OFF";
+  const last = s.codemapLast;
+  if (!last) return "ON (idle)";
+  if (last.mode === "failed") return `ON FAILED x${last.consecutiveFailures ?? 1}`;
+  const secs = Math.round((last.elapsedMs ?? 0) / 100) / 10;
+  return `ON ${last.symbols ?? 0} sym ${secs}s`;
+}
+
+function runCodemapIndexCommand(api: any): void {
+  const tui = api?.client?.tui;
+  if (!tui?.executeCommand) {
+    api.ui?.toast?.({ message: "当前 TUI 不支持 executeCommand，请直接输入 /codemap-index" });
+    return;
+  }
+  api.ui?.toast?.({ message: "CodeMap: 正在索引（.NET 仓库可能需要数十秒）…" });
+  Promise.resolve(tui.executeCommand({ command: "|codemap-index" })).catch((e: any) => {
+    api.ui?.toast?.({ message: `CodeMap 命令失败：${e?.message ?? e}` });
+  });
 }
 
 /** Git 非交互变量 — 展示已注入的 16 个环境变量 */
@@ -1200,6 +1239,7 @@ function showShellFixStatus(api: any): void {
     `  git-eol        ${s.gitLineEnding === "auto" ? "AUTO" : s.gitLineEnding === "config" ? "CONFIG" : "OFF"}`,
     `  env-inject     ${s.envInject ? "ON" : "OFF"}`,
     `  pwsh           ${s.autoFixPwsh ? "AUTO" : "OFF"}`,
+    `  codemap        ${formatCodemapState(s)}`,
     `  kickme         ${kickmeRules.length} rules (${enabledKickme} on)`,
     `  banner         ${s.showVersion !== false ? "ON" : "OFF"}`,
   ];

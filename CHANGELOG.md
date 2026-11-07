@@ -1,5 +1,17 @@
 # Changelog
 
+## v2.3.0 (2026-11-07)
+
+### 新功能 — CodeMap 索引自动化（插件侧硬保证）
+
+- **自带 MCP stdio 客户端**（`src/lib/codemap-mcp.ts`，零依赖）：直接 spawn `codemap-mcp.exe`，JSON-RPC 2.0 按行分隔；串行队列 + id 路由 + 空闲 5min 回收（Windows `taskkill /T /F`）；超时分层（initialize 15s / 普通调用 20s / `ensure_baseline` 180s）；进程异常退出时 flush 残留 buffer 并 reject 未决请求，下次调用自动重启
+- **索引编排层**（`src/lib/codemap-indexer.ts`）：`repoKey`/`normalizeRepoRoot`/`detectDotnetRepo`（仅 .NET 仓库生效）、`runEnsure`（inFlight 去重 + 60s 持久化冷却）、`ensureWorkspace`、overlay 刷新 5s 防抖、`cleanupIfNeeded`（`~/.codemap` >1GB 且 24h 间隔，dry_run 预估 freed ≥100MB 才实删，keep_count=3 / older_than_days=14）
+- **触发时机**（优先级：dotnet build 成功 > 会话开始 > `/codemap-index`）：`event` 钩子监听 `session.created`（幂等 ensure + workspace.create）、`file.edited`（`.cs` 变更 → refresh_overlay）、`session.deleted`（回收会话）
+- **新命令 `/codemap-index`**：无参数=重建并刷新，`status`=状态（baseline/commit/符号数/workspace），`cleanup`=清理旧 baseline；`config` 钩子自注册，失败可在 `opencode.jsonc` 手动注册
+- **新开关 `codemapIndex`（默认 true）**：`/shellfix codemap` 切换；TUI palette `shellfix.codemap`（切换）+ `shellfix.codemap-run`（立即重建）；状态面板新增 codemap 行（`ON 10962 sym 40.8s` / `OFF` / `ON FAILED xN`）
+- **日志与降噪策略**：成功 log 一行（repo/elapsed/符号数）；失败静默，连续失败 ≥3 次才通过 `system.transform` 一次性提醒
+- **Spike 实测**（方案 §4.1）：并发 ensure 无跨进程锁、无损坏（仅重复耗 CPU）；12s 强杀后无半写残留（暂存+原子落位），重跑 40.8s 成功 → 180s 超时安全
+
 ## v2.2.12 (2026-08-13)
 
 ### 新功能 — 编码环境变量注入 + PwshCheck 自动修复

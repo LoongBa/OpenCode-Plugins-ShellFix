@@ -130,6 +130,15 @@ import {
   getDefaultConditions,
 } from "./lib/auto-rules";
 
+import {
+  codemapOnSessionStart,
+  codemapOnCsEdited,
+  codemapOnBuildSuccess,
+  runCodemapCommand,
+  closeCodemapSession,
+  consumeCodemapFailureNotice,
+} from "./lib/codemap-indexer";
+
 // BUN 兼容：将所有 require() 提升为顶层 import
 import { execSync } from "child_process";
 import * as os from "os";
@@ -316,7 +325,8 @@ const SAFETY_PATTERNS: SafetyPattern[] = [
 // 插件主入口
 // ====================================================================
 
-export const ShellFixPlugin: Plugin = async () => {
+export const ShellFixPlugin: Plugin = async (input) => {
+  const baseDir = input?.worktree || input?.directory || process.cwd();
   const state = loadState();
   if (state.showVersion !== false) {
     console.log(
@@ -386,6 +396,53 @@ export const ShellFixPlugin: Plugin = async () => {
   }
 
   return {
+    // ================================================================
+    // 钩子 0: event — CodeMap 索引（created/edited/deleted）
+    // ================================================================
+    event: async ({ event }) => {
+      const e = event as any;
+      try {
+        if (e?.type !== "session.created" && e?.type !== "file.edited" && e?.type !== "session.deleted") return;
+        if (!loadState().codemapIndex) return;
+        if (e.type === "session.created") {
+          const dir = e.properties?.info?.directory || baseDir;
+          codemapOnSessionStart(dir);
+        } else if (e.type === "file.edited") {
+          const file = e?.properties?.file;
+          if (typeof file === "string" && file) codemapOnCsEdited(file, baseDir);
+        } else {
+          const dir = e.properties?.info?.directory;
+          if (typeof dir === "string" && dir) closeCodemapSession(dir);
+        }
+      } catch (err) {
+        console.error(`[ShellFix] event error:`, err);
+      }
+    },
+
+    // ================================================================
+    // 钩子 0b: config — 自注册 /codemap-index、/my、/auto（唯一注册来源）
+    // ================================================================
+    config: async (cfg) => {
+      try {
+        const c = cfg as any;
+        if (!c || typeof c !== "object") return;
+        if (!c.command || typeof c.command !== "object") c.command = {};
+        const cmds: Record<string, { template: string; description: string }> = {
+          "codemap-index": {
+            template: "|codemap-index $ARGUMENTS",
+            description: "CodeMap 索引维护（.NET 仓库）：无参数=重建并刷新，status=状态，cleanup=清理",
+          },
+          my: { template: "|my $ARGUMENTS", description: "ShellFix 模板系统" },
+          auto: { template: "|auto $ARGUMENTS", description: "ShellFix 自动化系统" },
+        };
+        for (const [name, def] of Object.entries(cmds)) {
+          if (!c.command[name]) c.command[name] = def;
+        }
+      } catch (e) {
+        console.error(`[ShellFix] config error:`, e);
+      }
+    },
+
     // ================================================================
     // 钩子 A: shell.env — Git 免交互环境变量
     // ================================================================
@@ -521,6 +578,17 @@ export const ShellFixPlugin: Plugin = async () => {
     // ================================================================
     "tool.execute.after": async (input, output) => {
       try {
+        const tool0 = (input as { tool: string }).tool;
+        const cmd0 = (input as { args?: { command?: string } }).args?.command;
+        if ((tool0 === "bash" || tool0 === "pwsh") && typeof cmd0 === "string") {
+          codemapOnBuildSuccess(
+            cmd0,
+            (output as { output?: string }).output || "",
+            (output as { metadata?: { exitCode?: number } }).metadata?.exitCode,
+            baseDir,
+          );
+        }
+
         const tool = (input as { tool: string }).tool;
         if (tool !== "bash" && tool !== "pwsh") return;
 
@@ -581,6 +649,9 @@ export const ShellFixPlugin: Plugin = async () => {
           break;
         case "auto":
           text = handleAutoCommand(args.trim());
+          break;
+        case "codemap-index":
+          text = await runCodemapCommand(args.trim(), baseDir);
           break;
         default:
           return; // 不处理未知命令
@@ -673,8 +744,13 @@ export const ShellFixPlugin: Plugin = async () => {
         saveState(s);
       }
 
+      const codemapNotice = consumeCodemapFailureNotice();
+      if (codemapNotice) {
+        out.content += `\n\n---\n${codemapNotice}`;
+      }
+
       // 没有可注入的内容 + 没有待提醒 → 无需修改系统提示
-      if (chunks.length === 0 && frequentErrors.length === 0 && pendingSafety.length === 0 && !pwshPending) {
+      if (chunks.length === 0 && frequentErrors.length === 0 && pendingSafety.length === 0 && !pwshPending && !codemapNotice) {
         // 仅 prompt 模式且已注入 chunks 才追加引导语（否则 return）
         return;
       }
