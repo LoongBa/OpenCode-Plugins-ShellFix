@@ -55,7 +55,7 @@ export interface CmdRules {
 /** @deprecated AutoState 已在 PluginState 中移除，由 autoRules/require/autoMode/moduleConditions 替代 */
 
 /** 当前插件版本号（单一事实来源） */
-export const PLUGIN_VERSION = "2.3.0";
+export const PLUGIN_VERSION = "2.3.1";
 
 export interface SyncConfig {
   repoUrl: string;
@@ -112,6 +112,8 @@ export interface PluginState {
   pwshCheck: PwshCheckState;
   codemapIndex: boolean;
   codemapLast: CodemapRunInfo | null;
+  alertToasts: boolean;
+  alertCounts: Record<string, number>;
 }
 
 export interface CmdErrorEntry {
@@ -247,6 +249,8 @@ const DEFAULT_STATE: PluginState = {
   pwshCheck: { pending: false, dismissed: "pending", notifyAutoFix: false },
   codemapIndex: true,
   codemapLast: null,
+  alertToasts: true,
+  alertCounts: {},
 };
 
 // ====================================================================
@@ -834,6 +838,28 @@ export function setCodemapLast(info: CodemapRunInfo | null): void {
   const s = loadState();
   s.codemapLast = info;
   saveState(s);
+}
+
+// ====================================================================
+// 调试提示（v2.3.1）：通用 toast + 计数总开关
+// ====================================================================
+
+/** 切换调试提示总开关（toast 弹与不弹；计数不受影响），返回新状态 */
+export function toggleAlertToasts(): boolean {
+  const s = loadState();
+  s.alertToasts = !s.alertToasts;
+  saveState(s);
+  return s.alertToasts;
+}
+
+/** 场景计数 +1（跨会话持久化），返回累计数 */
+export function bumpAlertCount(key: string): number {
+  const s = loadState();
+  if (!s.alertCounts || typeof s.alertCounts !== "object") s.alertCounts = {};
+  const next = (s.alertCounts[key] || 0) + 1;
+  s.alertCounts[key] = next;
+  saveState(s);
+  return next;
 }
 
 // ====================================================================

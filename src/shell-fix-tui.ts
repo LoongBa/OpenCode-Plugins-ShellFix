@@ -101,6 +101,7 @@ import {
   clearPendingSafetyWarnings,
   type SafetyWarnEntry,
   toggleCodemapIndex,
+  toggleAlertToasts,
 } from "../plugins/lib/state";
 
 import {
@@ -614,6 +615,15 @@ const tui: TuiPlugin = async (api, _options, _meta) => {
         },
       },
       {
+        name: "shellfix.alerts",
+        title: `ShellFix alerts 调试提示`,
+        category: SHELLFIX_CATEGORY,
+        namespace: "palette",
+        run() {
+          try { showToggleInfo(api, "alerts", toggleAlertToasts); } catch (e) { console.error(`[ShellFix] palette error (shellfix.alerts):`, e); }
+        },
+      },
+      {
         name: "shellfix.kickme",
         title: `ShellFix kickme 关键词通知`,
         category: SHELLFIX_CATEGORY,
@@ -1112,6 +1122,7 @@ const TOGGLE_META: Record<string, { label: string; desc: string; stateKey?: stri
   "env-inject": { label: "编码环境变量", desc: "注入 PYTHONUTF8=1、PYTHONIOENCODING=utf-8、LESSCHARSET=utf-8，让 Python/Node/less 等子进程输出 UTF-8", stateKey: "envInject" },
   pwsh: { label: "自动切换 PS7", desc: "检测到 PowerShell 5.1 时自动修改 opencode.jsonc 切换为 pwsh，从根本上解决编码问题", stateKey: "autoFixPwsh" },
   codemap: { label: "CodeMap 索引", desc: "会话开始 / dotnet build 成功后自动建立语义索引，编辑 .cs 后自动刷新 overlay（仅 .NET 仓库）", stateKey: "codemapIndex" },
+  alerts: { label: "调试提示", desc: "思考截断 / codemap 未建索引等 toast 提示 + 计数（总开关，默认 ON；关闭后计数仍累计）", stateKey: "alertToasts" },
 };
 
 function showToggleInfo(api: any, key: string, toggleFn: () => boolean): void {
@@ -1240,6 +1251,7 @@ function showShellFixStatus(api: any): void {
     `  env-inject     ${s.envInject ? "ON" : "OFF"}`,
     `  pwsh           ${s.autoFixPwsh ? "AUTO" : "OFF"}`,
     `  codemap        ${formatCodemapState(s)}`,
+    `  alerts         ${s.alertToasts ? "ON" : "OFF"}`,
     `  kickme         ${kickmeRules.length} rules (${enabledKickme} on)`,
     `  banner         ${s.showVersion !== false ? "ON" : "OFF"}`,
   ];
@@ -1438,6 +1450,9 @@ function showShellFixHelp(api: any): void {
     `shellfix.auto      auto 自动注入上下文`,
     `shellfix.cmd-errors cmd-errors 命令错误日志`,
     `shellfix.safety   safety 安全提醒`,
+    `shellfix.codemap  codemap CodeMap 索引开关`,
+    `shellfix.codemap-run codemap-run 立即重建索引`,
+    `shellfix.alerts   alerts 调试提示（toast+计数总开关）`,
     ``,
     `所有命令通过 Ctrl+P 访问。`,
   ];

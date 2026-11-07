@@ -2,7 +2,7 @@
 
 **Windows PowerShell 三大修复 + 七命令体系**
 
-当前版本：**v2.3.0**
+当前版本：**v2.3.1**
 
 ---
 
@@ -213,6 +213,22 @@ warning: in the working copy of 'foo.ts', LF will be replaced by CRLF the next t
 - 开关 `codemapIndex`（默认 ON）：`/shellfix codemap` 或 palette `shellfix.codemap`；palette `shellfix.codemap-run` 立即重建
 - 命令 `/codemap-index [status|cleanup]`：无参数=重建并刷新，`status`=索引状态，`cleanup`=清理旧 baseline
 - 底层直连 `codemap-mcp.exe`（stdio JSON-RPC），零运行时依赖；`SHELLFIX_CODEMAP_MCP` 可指定可执行文件路径
+
+---
+
+### ⑥ 调试提示 — toast + 计数（v2.3.1）
+
+调试期「静默失败」场景的通用提示通道：统一 toast 提示 + 跨会话计数，带总开关：
+
+| 场景 | 触发 | 提示内容 |
+|------|------|----------|
+| 思考截断 | `session.idle` 检测到末条回复「无正文 + 思考断尾」 | toast「思考截断」（红）+ 计数 |
+| codemap 未建索引 | 调用 `codemap_*` 工具报 `repo_path is required` 等 | toast「CodeMap 未建索引」+ 指引（ensure_baseline / /codemap-index）+ 计数 |
+
+- 总开关 `alertToasts`（默认 ON）：`palette shellfix.alerts` 或 `/shellfix alerts` 切换；**关闭后 toast 不弹、计数仍累计**（`alertCounts` 持久化 state.json）
+- 计数 key：`think-cut` / `codemap-no-index`（跨会话累计，toast 文案带「(累计 N 次)」）
+- 节流：同场景 5 分钟最多 1 条 toast，防连续工具调用刷屏
+- 思考截断**仅提示不自愈**（自动续写自愈在 v2.4 内测）
 
 ---
 

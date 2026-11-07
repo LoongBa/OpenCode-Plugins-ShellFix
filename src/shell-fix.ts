@@ -139,6 +139,8 @@ import {
   consumeCodemapFailureNotice,
 } from "./lib/codemap-indexer";
 
+import { detectThinkTruncation, detectCodemapNoIndex } from "./lib/toast-alerts";
+
 // BUN 兼容：将所有 require() 提升为顶层 import
 import { execSync } from "child_process";
 import * as os from "os";
@@ -397,11 +399,16 @@ export const ShellFixPlugin: Plugin = async (input) => {
 
   return {
     // ================================================================
-    // 钩子 0: event — CodeMap 索引（created/edited/deleted）
+    // 钩子 0: event — CodeMap 索引（created/edited/deleted）+ 调试提示（idle）
     // ================================================================
     event: async ({ event }) => {
       const e = event as any;
       try {
+        if (e?.type === "session.idle") {
+          const sid = e.properties?.sessionID;
+          if (typeof sid === "string") await detectThinkTruncation(sid, input.client);
+          return;
+        }
         if (e?.type !== "session.created" && e?.type !== "file.edited" && e?.type !== "session.deleted") return;
         if (!loadState().codemapIndex) return;
         if (e.type === "session.created") {
@@ -587,6 +594,11 @@ export const ShellFixPlugin: Plugin = async (input) => {
             (output as { metadata?: { exitCode?: number } }).metadata?.exitCode,
             baseDir,
           );
+        }
+
+        // 调试提示（v2.3.1）：codemap 工具未建索引错误 → toast + 计数（置于 bash 早退之前）
+        if (typeof tool0 === "string" && tool0.startsWith("codemap_")) {
+          detectCodemapNoIndex(tool0, (output as { output?: string }).output || "", input.client);
         }
 
         const tool = (input as { tool: string }).tool;

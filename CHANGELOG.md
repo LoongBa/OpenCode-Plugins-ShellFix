@@ -1,5 +1,16 @@
 # Changelog
 
+## v2.3.1 (2026-11-07)
+
+### 新功能 — 通用调试提示（toast + 计数）
+
+- **通用通道** `src/lib/toast-alerts.ts`（新增）：`alertToast()` —— 统一 toast + 计数，5 分钟/场景节流防刷屏
+- **总开关 `alertToasts`（默认 ON）**：`/shellfix alerts` 或 palette `shellfix.alerts` 切换；关闭后 toast 不弹但**计数仍累计**（`alertCounts` 持久化到 state.json，跨会话）
+- **场景 A：思考截断**（`session.idle` 事件）——末条 assistant 消息「无正文 + 思考断尾 + 非 tool-calls」→ toast「思考截断」（error 红）+ 计数 `think-cut`；同消息只提示一次。**仅检测不自愈**（自动续写留 v2.4）
+- **场景 B：codemap 未建索引**（`tool.execute.after`）——`codemap_*` 工具输出含 `repo_path is required` / `no repo has been indexed` / `Run index.ensure_baseline` → toast「CodeMap 未建索引」+ 指引（ensure_baseline / /codemap-index）+ 计数 `codemap-no-index`
+- 状态面板 / help 清单新增 `alerts` 条目（补 v2.3.0 遗漏的 codemap / codemap-run 条目）
+- 性能：计数走内存缓存 + 低频落盘（<1ms），触发场景均为低频事件，无感知
+
 ## v2.3.0 (2026-11-07)
 
 ### 新功能 — CodeMap 索引自动化（插件侧硬保证）
