@@ -120,6 +120,8 @@ import {
   getDefaultEnabledModules,
 } from "../plugins/lib/auto-rules";
 
+import { logLine } from "../plugins/lib/log-file";
+
 /** ShellFix palette 分组标题（唯一显示版本号的地方） */
 const SHELLFIX_CATEGORY = `ShellFix v${PLUGIN_VERSION}`;
 
@@ -500,7 +502,7 @@ function toast(api: any, message: string, variant: ToastVariant = "info", title?
     }
     api?.client?.tui?.showToast?.({ body: { title, message, variant } });
   } catch (e) {
-    console.error("[ShellFix] toast error:", e);
+    logLine("tui", "[ShellFix] toast error:", e);
   }
 }
 
@@ -518,7 +520,7 @@ function sendPrompt(api: any, text: string, label: string): void {
     .then(() => tui.submitPrompt?.())
     .then(() => toast(api, `已发送 ${label}`, "success"))
     .catch((e) => {
-      console.error("[ShellFix] sendPrompt error:", e);
+      logLine("tui", "[ShellFix] sendPrompt error:", e);
       toast(api, "发送失败", "error");
     });
 }
@@ -547,7 +549,7 @@ async function dispatch(api: any, cmd: string, args: string): Promise<boolean> {
         return true;
       }
     } catch (e) {
-      console.error(`[ShellFix] Local handler error for ${cmd}:`, e);
+      logLine("tui", `[ShellFix] Local handler error for ${cmd}:`, e);
       toast(api, "ShellFix 内部异常，详见日志", "error");
     }
   }
@@ -561,7 +563,7 @@ async function dispatch(api: any, cmd: string, args: string): Promise<boolean> {
 const tui: TuiPlugin = async (api, _options, _meta) => {
   try {
     if (!api?.keymap?.registerLayer) {
-      console.error(`[ShellFix] TUI keymap API missing — plugin disabled`);
+      logLine("tui", `[ShellFix] TUI keymap API missing — plugin disabled`);
       return;
     }
     api.keymap.registerLayer({
@@ -573,7 +575,7 @@ const tui: TuiPlugin = async (api, _options, _meta) => {
         category: SHELLFIX_CATEGORY,
         namespace: "palette",
         run() {
-          try { showShellFixStatus(api); } catch (e) { console.error(`[ShellFix] palette error (shellfix.status):`, e); toast(api, "ShellFix 内部异常，详见日志", "error"); }
+          try { showShellFixStatus(api); } catch (e) { logLine("tui", `[ShellFix] palette error (shellfix.status):`, e); toast(api, "ShellFix 内部异常，详见日志", "error"); }
         },
       },
       {
@@ -582,7 +584,7 @@ const tui: TuiPlugin = async (api, _options, _meta) => {
         category: SHELLFIX_CATEGORY,
         namespace: "palette",
         run() {
-          try { showToggleInfo(api, "encoding", toggleEncoding); } catch (e) { console.error(`[ShellFix] palette error (shellfix.encoding):`, e); toast(api, "ShellFix 内部异常，详见日志", "error"); }
+          try { showToggleInfo(api, "encoding", toggleEncoding); } catch (e) { logLine("tui", `[ShellFix] palette error (shellfix.encoding):`, e); toast(api, "ShellFix 内部异常，详见日志", "error"); }
         },
       },
       {
@@ -591,7 +593,7 @@ const tui: TuiPlugin = async (api, _options, _meta) => {
         category: SHELLFIX_CATEGORY,
         namespace: "palette",
         run() {
-          try { showCmdRules(api); } catch (e) { console.error(`[ShellFix] palette error (shellfix.bash):`, e); toast(api, "ShellFix 内部异常，详见日志", "error"); }
+          try { showCmdRules(api); } catch (e) { logLine("tui", `[ShellFix] palette error (shellfix.bash):`, e); toast(api, "ShellFix 内部异常，详见日志", "error"); }
         },
       },
       {
@@ -600,7 +602,7 @@ const tui: TuiPlugin = async (api, _options, _meta) => {
         category: SHELLFIX_CATEGORY,
         namespace: "palette",
         run() {
-          try { showToggleInfo(api, "log", toggleLog); } catch (e) { console.error(`[ShellFix] palette error (shellfix.log):`, e); toast(api, "ShellFix 内部异常，详见日志", "error"); }
+          try { showToggleInfo(api, "log", toggleLog); } catch (e) { logLine("tui", `[ShellFix] palette error (shellfix.log):`, e); toast(api, "ShellFix 内部异常，详见日志", "error"); }
         },
       },
       {
@@ -609,7 +611,7 @@ const tui: TuiPlugin = async (api, _options, _meta) => {
         category: SHELLFIX_CATEGORY,
         namespace: "palette",
         run() {
-          try { showGitEnv(api); } catch (e) { console.error(`[ShellFix] palette error (shellfix.git-env):`, e); toast(api, "ShellFix 内部异常，详见日志", "error"); }
+          try { showGitEnv(api); } catch (e) { logLine("tui", `[ShellFix] palette error (shellfix.git-env):`, e); toast(api, "ShellFix 内部异常，详见日志", "error"); }
         },
       },
       {
@@ -618,7 +620,7 @@ const tui: TuiPlugin = async (api, _options, _meta) => {
         category: SHELLFIX_CATEGORY,
         namespace: "palette",
         run() {
-          try { showGitLineEnding(api); } catch (e) { console.error(`[ShellFix] palette error (shellfix.git-eol):`, e); toast(api, "ShellFix 内部异常，详见日志", "error"); }
+          try { showGitLineEnding(api); } catch (e) { logLine("tui", `[ShellFix] palette error (shellfix.git-eol):`, e); toast(api, "ShellFix 内部异常，详见日志", "error"); }
         },
       },
       {
@@ -627,7 +629,7 @@ const tui: TuiPlugin = async (api, _options, _meta) => {
         category: SHELLFIX_CATEGORY,
         namespace: "palette",
         run() {
-          try { showToggleInfo(api, "env-inject", toggleEnvInject); } catch (e) { console.error(`[ShellFix] palette error (shellfix.env-inject):`, e); toast(api, "ShellFix 内部异常，详见日志", "error"); }
+          try { showToggleInfo(api, "env-inject", toggleEnvInject); } catch (e) { logLine("tui", `[ShellFix] palette error (shellfix.env-inject):`, e); toast(api, "ShellFix 内部异常，详见日志", "error"); }
         },
       },
       {
@@ -636,7 +638,7 @@ const tui: TuiPlugin = async (api, _options, _meta) => {
         category: SHELLFIX_CATEGORY,
         namespace: "palette",
         run() {
-          try { showToggleInfo(api, "pwsh", toggleAutoFixPwsh); } catch (e) { console.error(`[ShellFix] palette error (shellfix.pwsh):`, e); toast(api, "ShellFix 内部异常，详见日志", "error"); }
+          try { showToggleInfo(api, "pwsh", toggleAutoFixPwsh); } catch (e) { logLine("tui", `[ShellFix] palette error (shellfix.pwsh):`, e); toast(api, "ShellFix 内部异常，详见日志", "error"); }
         },
       },
       {
@@ -645,7 +647,7 @@ const tui: TuiPlugin = async (api, _options, _meta) => {
         category: SHELLFIX_CATEGORY,
         namespace: "palette",
         run() {
-          try { showToggleInfo(api, "codemap", toggleCodemapIndex); } catch (e) { console.error(`[ShellFix] palette error (shellfix.codemap):`, e); toast(api, "ShellFix 内部异常，详见日志", "error"); }
+          try { showToggleInfo(api, "codemap", toggleCodemapIndex); } catch (e) { logLine("tui", `[ShellFix] palette error (shellfix.codemap):`, e); toast(api, "ShellFix 内部异常，详见日志", "error"); }
         },
       },
       {
@@ -654,7 +656,7 @@ const tui: TuiPlugin = async (api, _options, _meta) => {
         category: SHELLFIX_CATEGORY,
         namespace: "palette",
         run() {
-          try { runCodemapIndexCommand(api); } catch (e) { console.error(`[ShellFix] palette error (shellfix.codemap-run):`, e); toast(api, "ShellFix 内部异常，详见日志", "error"); }
+          try { runCodemapIndexCommand(api); } catch (e) { logLine("tui", `[ShellFix] palette error (shellfix.codemap-run):`, e); toast(api, "ShellFix 内部异常，详见日志", "error"); }
         },
       },
       {
@@ -663,7 +665,7 @@ const tui: TuiPlugin = async (api, _options, _meta) => {
         category: SHELLFIX_CATEGORY,
         namespace: "palette",
         run() {
-          try { showToggleInfo(api, "alerts", toggleAlertToasts); } catch (e) { console.error(`[ShellFix] palette error (shellfix.alerts):`, e); toast(api, "ShellFix 内部异常，详见日志", "error"); }
+          try { showToggleInfo(api, "alerts", toggleAlertToasts); } catch (e) { logLine("tui", `[ShellFix] palette error (shellfix.alerts):`, e); toast(api, "ShellFix 内部异常，详见日志", "error"); }
         },
       },
       {
@@ -672,7 +674,7 @@ const tui: TuiPlugin = async (api, _options, _meta) => {
         category: SHELLFIX_CATEGORY,
         namespace: "palette",
         run() {
-          try { showKickme(api); } catch (e) { console.error(`[ShellFix] palette error (shellfix.kickme):`, e); toast(api, "ShellFix 内部异常，详见日志", "error"); }
+          try { showKickme(api); } catch (e) { logLine("tui", `[ShellFix] palette error (shellfix.kickme):`, e); toast(api, "ShellFix 内部异常，详见日志", "error"); }
         },
       },
       {
@@ -681,7 +683,7 @@ const tui: TuiPlugin = async (api, _options, _meta) => {
         category: SHELLFIX_CATEGORY,
         namespace: "palette",
         run() {
-          try { showToggleInfo(api, "banner", toggleShowVersion); } catch (e) { console.error(`[ShellFix] palette error (shellfix.banner):`, e); toast(api, "ShellFix 内部异常，详见日志", "error"); }
+          try { showToggleInfo(api, "banner", toggleShowVersion); } catch (e) { logLine("tui", `[ShellFix] palette error (shellfix.banner):`, e); toast(api, "ShellFix 内部异常，详见日志", "error"); }
         },
       },
       {
@@ -690,7 +692,7 @@ const tui: TuiPlugin = async (api, _options, _meta) => {
         category: SHELLFIX_CATEGORY,
         namespace: "palette",
         run() {
-          try { showDoctor(api); } catch (e) { console.error(`[ShellFix] palette error (shellfix.sysinfo):`, e); toast(api, "ShellFix 内部异常，详见日志", "error"); }
+          try { showDoctor(api); } catch (e) { logLine("tui", `[ShellFix] palette error (shellfix.sysinfo):`, e); toast(api, "ShellFix 内部异常，详见日志", "error"); }
         },
       },
       {
@@ -699,7 +701,7 @@ const tui: TuiPlugin = async (api, _options, _meta) => {
         category: SHELLFIX_CATEGORY,
         namespace: "palette",
         run() {
-          try { showAbout(api); } catch (e) { console.error(`[ShellFix] palette error (shellfix.about):`, e); toast(api, "ShellFix 内部异常，详见日志", "error"); }
+          try { showAbout(api); } catch (e) { logLine("tui", `[ShellFix] palette error (shellfix.about):`, e); toast(api, "ShellFix 内部异常，详见日志", "error"); }
         },
       },
       {
@@ -708,7 +710,7 @@ const tui: TuiPlugin = async (api, _options, _meta) => {
         category: SHELLFIX_CATEGORY,
         namespace: "palette",
         run() {
-          try { showShellFixHelp(api); } catch (e) { console.error(`[ShellFix] palette error (shellfix.help):`, e); toast(api, "ShellFix 内部异常，详见日志", "error"); }
+          try { showShellFixHelp(api); } catch (e) { logLine("tui", `[ShellFix] palette error (shellfix.help):`, e); toast(api, "ShellFix 内部异常，详见日志", "error"); }
         },
       },
       {
@@ -717,7 +719,7 @@ const tui: TuiPlugin = async (api, _options, _meta) => {
         category: SHELLFIX_CATEGORY,
         namespace: "palette",
         run() {
-          try { showCmdErrors(api); } catch (e) { console.error(`[ShellFix] palette error (shellfix.cmd-errors):`, e); toast(api, "ShellFix 内部异常，详见日志", "error"); }
+          try { showCmdErrors(api); } catch (e) { logLine("tui", `[ShellFix] palette error (shellfix.cmd-errors):`, e); toast(api, "ShellFix 内部异常，详见日志", "error"); }
         },
       },
       {
@@ -726,7 +728,7 @@ const tui: TuiPlugin = async (api, _options, _meta) => {
         category: SHELLFIX_CATEGORY,
         namespace: "palette",
         run() {
-          try { showSafety(api); } catch (e) { console.error(`[ShellFix] palette error (shellfix.safety):`, e); toast(api, "ShellFix 内部异常，详见日志", "error"); }
+          try { showSafety(api); } catch (e) { logLine("tui", `[ShellFix] palette error (shellfix.safety):`, e); toast(api, "ShellFix 内部异常，详见日志", "error"); }
         },
       },
 
@@ -737,7 +739,7 @@ const tui: TuiPlugin = async (api, _options, _meta) => {
         category: SHELLFIX_CATEGORY,
         namespace: "palette",
         run() {
-          try { showTemplateSystem(api); } catch (e) { console.error(`[ShellFix] palette error (shellfix.my):`, e); toast(api, "ShellFix 内部异常，详见日志", "error"); }
+          try { showTemplateSystem(api); } catch (e) { logLine("tui", `[ShellFix] palette error (shellfix.my):`, e); toast(api, "ShellFix 内部异常，详见日志", "error"); }
         },
       },
 
@@ -748,7 +750,7 @@ const tui: TuiPlugin = async (api, _options, _meta) => {
         category: SHELLFIX_CATEGORY,
         namespace: "palette",
         run() {
-          try { showNoteSystem(api); } catch (e) { console.error(`[ShellFix] palette error (shellfix.note):`, e); toast(api, "ShellFix 内部异常，详见日志", "error"); }
+          try { showNoteSystem(api); } catch (e) { logLine("tui", `[ShellFix] palette error (shellfix.note):`, e); toast(api, "ShellFix 内部异常，详见日志", "error"); }
         },
       },
       {
@@ -757,7 +759,7 @@ const tui: TuiPlugin = async (api, _options, _meta) => {
         category: SHELLFIX_CATEGORY,
         namespace: "palette",
         run() {
-          try { showAutoSystem(api); } catch (e) { console.error(`[ShellFix] palette error (shellfix.auto):`, e); toast(api, "ShellFix 内部异常，详见日志", "error"); }
+          try { showAutoSystem(api); } catch (e) { logLine("tui", `[ShellFix] palette error (shellfix.auto):`, e); toast(api, "ShellFix 内部异常，详见日志", "error"); }
         },
       },
 
@@ -784,7 +786,7 @@ const tui: TuiPlugin = async (api, _options, _meta) => {
   //   }, 800);
   // }
   } catch (e) {
-    console.error(`[ShellFix] TUI plugin initialization failed:`, e);
+    logLine("tui", `[ShellFix] TUI plugin initialization failed:`, e);
   }
 };
 
@@ -867,7 +869,7 @@ function showTemplateSystem(api: any): void {
       toast(api, "暂无模板", "warning");
     }
   } catch (e) {
-    console.error(`[ShellFix] showTemplateSystem error:`, e);
+    logLine("tui", `[ShellFix] showTemplateSystem error:`, e);
     toast(api, "ShellFix 内部异常，详见日志", "error");
   }
 }
@@ -894,7 +896,7 @@ function showTemplateHelp(api: any, all: any[]): void {
     api.ui.DialogAlert({
       title: "模板系统 — 使用帮助",
       message: lines.join("\n"),
-      onConfirm: () => { try { showTemplateSystem(api); } catch (e) { console.error(`[ShellFix] templateHelp onConfirm error:`, e); } },
+      onConfirm: () => { try { showTemplateSystem(api); } catch (e) { logLine("tui", `[ShellFix] templateHelp onConfirm error:`, e); } },
     })
   );
 }
@@ -933,7 +935,7 @@ function showTemplateEditor(api: any, all: any[]): void {
                       toast(api, "内容不能为空", "warning");
                     }
                   } catch (e) {
-                    console.error(`[ShellFix] save template error:`, e);
+                    logLine("tui", `[ShellFix] save template error:`, e);
                     toast(api, "保存失败", "error");
                   }
                   api.ui.dialog?.clear?.();
@@ -942,7 +944,7 @@ function showTemplateEditor(api: any, all: any[]): void {
               })
             );
           } catch (e) {
-            console.error(`[ShellFix] template editor select error:`, e);
+            logLine("tui", `[ShellFix] template editor select error:`, e);
             toast(api, "编辑异常", "error");
             api.ui.dialog?.clear?.();
           }
@@ -951,7 +953,7 @@ function showTemplateEditor(api: any, all: any[]): void {
       })
     );
   } catch (e) {
-    console.error(`[ShellFix] showTemplateEditor error:`, e);
+    logLine("tui", `[ShellFix] showTemplateEditor error:`, e);
     toast(api, "编辑界面异常", "error");
   }
 }
@@ -991,7 +993,7 @@ function showTemplateRender(api: any, name: string): void {
                 toast(api, "渲染失败", "error");
               }
             } catch (e) {
-              console.error(`[ShellFix] templateRender onConfirm error:`, e);
+              logLine("tui", `[ShellFix] templateRender onConfirm error:`, e);
               toast(api, "模板渲染异常", "error");
             }
             api.ui.dialog?.clear?.();
@@ -1009,7 +1011,7 @@ function showTemplateRender(api: any, name: string): void {
       api.ui.dialog?.clear?.();
     }
   } catch (e) {
-    console.error(`[ShellFix] showTemplateRender error:`, e);
+    logLine("tui", `[ShellFix] showTemplateRender error:`, e);
     toast(api, "模板渲染异常", "error");
   }
 }
@@ -1048,7 +1050,7 @@ function showAutoSystem(api: any): void {
       })
     );
   } catch (e) {
-    console.error(`[ShellFix] showAutoSystem error:`, e);
+    logLine("tui", `[ShellFix] showAutoSystem error:`, e);
     toast(api, "ShellFix 内部异常，详见日志", "error");
   }
 }
@@ -1103,11 +1105,11 @@ function showAutoHelp(api: any): void {
       api.ui.DialogAlert({
         title: "自动化系统 — 使用帮助",
         message: lines.join("\n"),
-        onConfirm: () => { try { showAutoSystem(api); } catch (e) { console.error(`[ShellFix] autoHelp onConfirm error:`, e); } },
+        onConfirm: () => { try { showAutoSystem(api); } catch (e) { logLine("tui", `[ShellFix] autoHelp onConfirm error:`, e); } },
       })
     );
   } catch (e) {
-    console.error(`[ShellFix] showAutoHelp error:`, e);
+    logLine("tui", `[ShellFix] showAutoHelp error:`, e);
     toast(api, "ShellFix 内部异常，详见日志", "error");
   }
 }
@@ -1128,7 +1130,7 @@ function showAutoModeSelector(api: any): void {
             setAutoMode(mode as AutoMode);
             toast(api, `模式: ${mode}`, "success");
           } catch (e) {
-            console.error(`[ShellFix] autoModeSelector onSelect error:`, e);
+            logLine("tui", `[ShellFix] autoModeSelector onSelect error:`, e);
             toast(api, "ShellFix 内部异常，详见日志", "error");
           }
           api.ui.dialog?.clear?.();
@@ -1137,7 +1139,7 @@ function showAutoModeSelector(api: any): void {
       })
     );
   } catch (e) {
-    console.error(`[ShellFix] showAutoModeSelector error:`, e);
+    logLine("tui", `[ShellFix] showAutoModeSelector error:`, e);
     toast(api, "ShellFix 内部异常，详见日志", "error");
   }
 }
@@ -1190,7 +1192,7 @@ function showToggleInfo(api: any, key: string, toggleFn: () => boolean): void {
             const next = toggleFn();
             toast(api, `${label}: ${next ? "ON" : "OFF"}`, "success");
           } catch (e) {
-            console.error(`[ShellFix] toggle onConfirm error:`, e);
+            logLine("tui", `[ShellFix] toggle onConfirm error:`, e);
             toast(api, "ShellFix 内部异常，详见日志", "error");
           }
           api.ui.dialog?.clear?.();
@@ -1198,7 +1200,7 @@ function showToggleInfo(api: any, key: string, toggleFn: () => boolean): void {
       })
     );
   } catch (e) {
-    console.error(`[ShellFix] showToggleInfo error:`, e);
+    logLine("tui", `[ShellFix] showToggleInfo error:`, e);
     toast(api, "ShellFix 内部异常，详见日志", "error");
   }
 }
@@ -1330,7 +1332,7 @@ function showCmdRules(api: any): void {
             setCmdRule(value as CmdRuleName, !s.cmdRules[value as CmdRuleName]);
             toast(api, `${CMD_RULES_META.find((m) => m.name === value)?.label || value}: ${!s.cmdRules[value as CmdRuleName] ? "ON" : "OFF"}`, "success");
           } catch (e) {
-            console.error(`[ShellFix] cmdRules onSelect error:`, e);
+            logLine("tui", `[ShellFix] cmdRules onSelect error:`, e);
             toast(api, "ShellFix 内部异常，详见日志", "error");
           }
           api.ui.dialog?.clear?.();
@@ -1339,7 +1341,7 @@ function showCmdRules(api: any): void {
       })
     );
   } catch (e) {
-    console.error(`[ShellFix] showCmdRules error:`, e);
+    logLine("tui", `[ShellFix] showCmdRules error:`, e);
     toast(api, "ShellFix 内部异常，详见日志", "error");
   }
 }
@@ -1367,7 +1369,7 @@ function showGitLineEnding(api: any): void {
       })
     );
   } catch (e) {
-    console.error(`[ShellFix] showGitLineEnding error:`, e);
+    logLine("tui", `[ShellFix] showGitLineEnding error:`, e);
     toast(api, "ShellFix 内部异常，详见日志", "error");
   }
 }
@@ -1477,7 +1479,7 @@ async function showAbout(api: any): Promise<void> {
       })
     );
   } catch (e) {
-    console.error(`[ShellFix] showAbout error:`, e);
+    logLine("tui", `[ShellFix] showAbout error:`, e);
     toast(api, "ShellFix 内部异常，详见日志", "error");
   }
 }
@@ -1551,7 +1553,7 @@ function showCmdErrors(api: any): void {
       if (!e.notified) markCmdErrorNotified(e.cmd);
     }
   } catch (e) {
-    console.error(`[ShellFix] showCmdErrors error:`, e);
+    logLine("tui", `[ShellFix] showCmdErrors error:`, e);
     toast(api, "ShellFix 内部异常，详见日志", "error");
   }
 }
@@ -1591,7 +1593,7 @@ function showSafety(api: any): void {
       })
     );
   } catch (e) {
-    console.error(`[ShellFix] showSafety error:`, e);
+    logLine("tui", `[ShellFix] showSafety error:`, e);
     toast(api, "ShellFix 内部异常，详见日志", "error");
   }
 }

@@ -17,7 +17,7 @@ $coreFiles = @("shell-fix.ts")
 # TUI 调度器（palette / 事件订阅，tui.json 注册）→ tui-plugins\
 $tuiFiles = @("shell-fix-tui.ts")
 # 公共库（版本号等）→ plugins\lib\（TUI 插件经 ../plugins/lib/* 引用）
-$libFiles = @("state.ts", "template-store.ts", "auto-rules.ts", "codemap-mcp.ts", "codemap-indexer.ts", "toast-alerts.ts")
+$libFiles = @("state.ts", "template-store.ts", "auto-rules.ts", "codemap-mcp.ts", "codemap-indexer.ts", "toast-alerts.ts", "log-file.ts")
 
 Write-Host "ShellFix 部署脚本" -ForegroundColor Cyan
 Write-Host "=================" -ForegroundColor Cyan

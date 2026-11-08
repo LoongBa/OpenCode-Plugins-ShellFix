@@ -139,6 +139,7 @@ import {
 } from "./lib/codemap-indexer";
 
 import { detectThinkTruncation, detectCodemapNoIndex } from "./lib/toast-alerts";
+import { logLine } from "./lib/log-file";
 
 // BUN 兼容：将所有 require() 提升为顶层 import
 import { execSync } from "child_process";
@@ -330,7 +331,7 @@ export const ShellFixPlugin: Plugin = async (input) => {
   const baseDir = input?.worktree || input?.directory || process.cwd();
   const state = loadState();
   if (state.showVersion !== false) {
-    console.log(
+    logLine("core", 
       `[${PLUGIN_NAME}] v${PLUGIN_VERSION} loaded — ` +
         `encoding:${state.encoding ? "ON" : "OFF"} ` +
         `rules:${getEnabledRuleNames(state).length} ` +
@@ -381,7 +382,7 @@ export const ShellFixPlugin: Plugin = async (input) => {
                 state.pwshCheck.notifyAutoFix = true;
                 saveState(state);
               } catch (e) {
-                console.error(`[ShellFix] PwshCheck auto-fix failed:`, e);
+                logLine("core", `[ShellFix] PwshCheck auto-fix failed:`, e);
               }
             } else {
               // 传统模式：设置 pending，由 system.transform 提示
@@ -418,7 +419,7 @@ export const ShellFixPlugin: Plugin = async (input) => {
           if (typeof dir === "string" && dir) closeCodemapSession(dir);
         }
       } catch (err) {
-        console.error(`[ShellFix] event error:`, err);
+        logLine("core", `[ShellFix] event error:`, err);
       }
     },
 
@@ -442,7 +443,7 @@ export const ShellFixPlugin: Plugin = async (input) => {
           if (!c.command[name]) c.command[name] = def;
         }
       } catch (e) {
-        console.error(`[ShellFix] config error:`, e);
+        logLine("core", `[ShellFix] config error:`, e);
       }
     },
 
@@ -634,7 +635,7 @@ export const ShellFixPlugin: Plugin = async (input) => {
           (output as { output: string }).output = `${resultText}\n\n${hint}`;
         }
       } catch (e) {
-        console.error(`[ShellFix] tool.execute.after error:`, e);
+        logLine("core", `[ShellFix] tool.execute.after error:`, e);
       }
     },
 

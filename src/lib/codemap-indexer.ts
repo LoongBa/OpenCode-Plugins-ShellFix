@@ -17,6 +17,7 @@ import {
   type McpResult,
 } from "./codemap-mcp";
 import { loadState, setCodemapLast, type CodemapRunInfo, type CodemapRunMode } from "./state";
+import { logLine } from "./log-file";
 
 const COOLDOWN_MS = 60_000;
 const FAIL_LOG_THROTTLE_MS = 5 * 60_000;
@@ -171,7 +172,7 @@ function recordRun(res: RunResult): void {
   };
   setCodemapLast(info);
   if (res.mode === "built" && state.log) {
-    console.error(
+    logLine("CodeMap", 
       `[ShellFix][CodeMap] ${info.at} repo=${res.repo} mode=built elapsed=${res.elapsedMs}ms symbols=${res.symbols} sha=${res.sha.slice(0, 8)}`,
     );
   }
@@ -180,7 +181,7 @@ function recordRun(res: RunResult): void {
     const now = Date.now();
     if (now - (lastFailLogAt.get(key) ?? 0) >= FAIL_LOG_THROTTLE_MS) {
       lastFailLogAt.set(key, now);
-      console.error(
+      logLine("CodeMap", 
         `[ShellFix][CodeMap] ${info.at} repo=${res.repo} mode=failed failures=${failures} error=${res.error ?? "unknown"}`,
       );
     }
@@ -328,7 +329,7 @@ export async function cleanupIfNeeded(repoRoot: string): Promise<void> {
     if (dry.ok && freed >= CLEANUP_MIN_FREED_BYTES) {
       const real = await session.call("index.cleanup", { ...baseArgs, dry_run: false }, 120_000);
       if (loadState().log) {
-        console.error(
+        logLine("CodeMap", 
           `[ShellFix][CodeMap] cleanup ${real.ok ? "ok" : "failed"} freed≈${freed}B ${real.error ?? ""}`.trim(),
         );
       }

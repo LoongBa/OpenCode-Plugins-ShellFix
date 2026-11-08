@@ -1,5 +1,15 @@
 # Changelog
 
+## v2.3.3 (2026-11-08)
+
+### 修复 — 插件日志污染 TUI 输入框（红字）
+
+- **根因**：插件 `console.error` 直写进程 stderr，与 TUI 共用同一终端 → 原始文本覆盖渲染区，表现为输入框附近红字乱码（如 `[ShellFix][CodeMap] ... mode=built elapsed=... symbols=...`）。opencode 插件 API 无 logger，`console.*` 无处可去
+- **新增文件日志通道**：`src/lib/log-file.ts` 的 `logLine(tag, ...)` → 写 `~/.local/share/opencode/log/shellfix.log`（与 opencode 日志同目录）；>5MB 时保留最后 1MB；任何异常静默
+- **全量替换 54 处** `console.*`：`shell-fix-tui.ts`（46）/ `shell-fix.ts`（5）/ `codemap-indexer.ts`（3）→ 插件运行期**零 stdout/stderr 输出**
+- **toast 行为不变**：红色 catch 提示照旧弹出，只是诊断信息不再打终端
+- `deploy.ps1` 追加 `log-file.ts`（新增 lib 文件）
+
 ## v2.3.2 (2026-11-08)
 
 ### 修复 — CodeMap overlay 跨进程锁冲突
