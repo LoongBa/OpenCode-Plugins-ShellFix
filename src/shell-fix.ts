@@ -132,7 +132,6 @@ import {
 
 import {
   codemapOnSessionStart,
-  codemapOnCsEdited,
   codemapOnBuildSuccess,
   runCodemapCommand,
   closeCodemapSession,
@@ -409,14 +408,11 @@ export const ShellFixPlugin: Plugin = async (input) => {
           if (typeof sid === "string") await detectThinkTruncation(sid, input.client);
           return;
         }
-        if (e?.type !== "session.created" && e?.type !== "file.edited" && e?.type !== "session.deleted") return;
+        if (e?.type !== "session.created" && e?.type !== "session.deleted") return;
         if (!loadState().codemapIndex) return;
         if (e.type === "session.created") {
           const dir = e.properties?.info?.directory || baseDir;
           codemapOnSessionStart(dir);
-        } else if (e.type === "file.edited") {
-          const file = e?.properties?.file;
-          if (typeof file === "string" && file) codemapOnCsEdited(file, baseDir);
         } else {
           const dir = e.properties?.info?.directory;
           if (typeof dir === "string" && dir) closeCodemapSession(dir);

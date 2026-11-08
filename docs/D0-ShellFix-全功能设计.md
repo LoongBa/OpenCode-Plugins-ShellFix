@@ -97,7 +97,7 @@ ShellFix v2.2.8  ← 黄色分组标题
 /my <sub> [args...]       — 模板系统（slash + palette）
 ├── ?                     → 列出所有模板
 ├── ? <name>              → 预览模板内容
-├── <name> [args...]      → 渲染模板，填入输入框
+├── <name> [args...]      → 渲染模板，直接发送 + 绿色 toast
 ├── save <name> <content> → 保存模板
 ├── rm <name>             → 删除模板
 ├── show <name>           → 查看原始内容
@@ -133,21 +133,22 @@ ShellFix v2.2.8  ← 黄色分组标题
 ### 执行流程
 
 ```
-用户操作（Ctrl+P 或 输入框）
+用户操作（Ctrl+P 或 斜杠命令）
   │
   ├─ TUI 调度器 dispatch(cmd, args)
   │   ├─ handlers.get(cmd) → LocalHandler(args)
-  │   │   ├─ 返回 { output } → api.client.tui.appendPrompt({ text })
-  │   │   │                   → 填入输入框，用户按回车发送
-  │   │   ├─ 返回 { toast }  → api.ui.toast({ message })
-  │   │   │                   → 瞬时通知，无需用户操作
+  │   │   ├─ 返回 { output } → DialogAlert 面板（多行，可滚动）
+  │   │   ├─ 返回 { toast, variant } → api.ui.toast({ message, variant })
+  │   │   │                   → 四色瞬时通知（蓝 info / 绿 success / 橙 warning / 红 error）
   │   │   └─ 返回 null       → 未处理
   │   │
   │   └─ 未处理 → api.client.tui.executeCommand({ command: "|cmd args" })
   │               → 服务器 command.execute.before 处理
   │               → 返回 { parts: [text] }，无 LLM 调用
   │
-  └─ LLM 不参与 ✅
+  └─ 模板执行：appendPrompt + submitPrompt → 直接发送（不再停留输入框）
+
+LLM 不参与 ✅
 ```
 
 ### 本地 vs 服务器

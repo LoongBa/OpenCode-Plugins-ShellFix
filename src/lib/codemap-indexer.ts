@@ -1,22 +1,25 @@
 /**
- * CodeMap 索引编排 — .NET 仓库检测、去重、ensure/workspace/overlay/cleanup
+ * CodeMap 索引编排 — .NET 仓库检测、去重、ensure/cleanup
  *
- * 所有入口失败静默（仅日志），显式命令与状态面板负责可见性。
+ * 自动路径只维护 baseline 与磁盘清理；overlay/workspace 归 Agent 侧 codemap MCP
+ * （避免两个进程同写 ~/.codemap/store/overlays/<ws>/overlay.wal）。
+ * 失败静默 + 5 分钟节流日志，显式命令与状态面板负责可见性。
  */
 
 import { execFileSync } from "child_process";
 import { readdirSync, statSync } from "fs";
 import { homedir } from "os";
-import { dirname, join, resolve } from "path";
+import { join, resolve } from "path";
 import {
   CodemapSession,
   ENSURE_TIMEOUT_MS,
   resolveCodemapExe,
+  type McpResult,
 } from "./codemap-mcp";
 import { loadState, setCodemapLast, type CodemapRunInfo, type CodemapRunMode } from "./state";
 
 const COOLDOWN_MS = 60_000;
-const REFRESH_DEBOUNCE_MS = 5_000;
+const FAIL_LOG_THROTTLE_MS = 5 * 60_000;
 const CLEANUP_THRESHOLD_BYTES = 1024 ** 3;
 const CLEANUP_INTERVAL_MS = 24 * 3600_000;
 const CLEANUP_MIN_FREED_BYTES = 100 * 1024 * 1024;
@@ -50,8 +53,7 @@ export interface DotnetRepo {
 
 const sessions = new Map<string, CodemapSession>();
 const runs = new Map<string, { inFlight: Promise<RunResult> | null; lastSha: string; lastAt: number }>();
-const pendingRefresh = new Map<string, { repo: string; files: Set<string> }>();
-let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+const lastFailLogAt = new Map<string, number>();
 
 export function repoKey(path: string): string {
   const abs = resolve(path);
@@ -173,6 +175,16 @@ function recordRun(res: RunResult): void {
       `[ShellFix][CodeMap] ${info.at} repo=${res.repo} mode=built elapsed=${res.elapsedMs}ms symbols=${res.symbols} sha=${res.sha.slice(0, 8)}`,
     );
   }
+  if (res.mode === "failed" && state.log) {
+    const key = repoKey(res.repo);
+    const now = Date.now();
+    if (now - (lastFailLogAt.get(key) ?? 0) >= FAIL_LOG_THROTTLE_MS) {
+      lastFailLogAt.set(key, now);
+      console.error(
+        `[ShellFix][CodeMap] ${info.at} repo=${res.repo} mode=failed failures=${failures} error=${res.error ?? "unknown"}`,
+      );
+    }
+  }
 }
 
 export async function runEnsure(repoRoot: string, opts: { force?: boolean } = {}): Promise<RunResult> {
@@ -236,52 +248,20 @@ export async function ensureWorkspace(repoRoot: string, wsId = workspaceId()): P
       if (found) return true;
     }
   }
-  const created = await session.call("workspace.create", { repo_path: repo, workspace_id: wsId });
+  const created = await session.callWithRetry(
+    "workspace.create",
+    { repo_path: repo, workspace_id: wsId },
+    { attempts: 2 },
+  );
   return created.ok;
 }
 
-export function scheduleOverlayRefresh(repoRoot: string, files: string[]): void {
-  const repo = resolve(repoRoot);
-  const key = repoKey(repo);
-  const entry = pendingRefresh.get(key) ?? { repo, files: new Set<string>() };
-  for (const file of files) {
-    if (file) entry.files.add(file);
-  }
-  pendingRefresh.set(key, entry);
-  if (refreshTimer) clearTimeout(refreshTimer);
-  refreshTimer = setTimeout(() => {
-    void flushOverlayRefresh();
-  }, REFRESH_DEBOUNCE_MS);
-  (refreshTimer as any)?.unref?.();
-}
-
-async function flushOverlayRefresh(): Promise<void> {
-  refreshTimer = null;
-  const entries = [...pendingRefresh.values()];
-  pendingRefresh.clear();
-  for (const entry of entries) {
-    try {
-      const session = getSession(entry.repo);
-      const args: Record<string, unknown> = { repo_path: entry.repo, workspace_id: workspaceId() };
-      const files = [...entry.files].filter((f) => /\.cs$/i.test(f)).map((f) => f.replace(/\\/g, "/"));
-      if (files.length) args.file_paths = files;
-      const r = await session.call("index.refresh_overlay", args);
-      if (!r.ok && loadState().log) {
-        console.error(`[ShellFix][CodeMap] refresh_overlay failed: ${r.error}`);
-      }
-    } catch {
-      /* 静默 */
-    }
-  }
-}
-
-export async function refreshOverlayNow(repoRoot: string, files?: string[]): Promise<boolean> {
+export async function refreshOverlayNow(repoRoot: string, files?: string[]): Promise<McpResult> {
   const repo = resolve(repoRoot);
   const session = getSession(repo);
   const args: Record<string, unknown> = { repo_path: repo, workspace_id: workspaceId() };
   if (files && files.length) args.file_paths = files.map((f) => f.replace(/\\/g, "/"));
-  const r = await session.call("index.refresh_overlay", args);
-  return r.ok;
+  return session.callWithRetry("index.refresh_overlay", args, { attempts: 3 });
 }
 
 function dirSize(dir: string): number {
@@ -409,11 +389,16 @@ export async function runCodemapCommand(args: string, dir: string): Promise<stri
   const res = await runEnsure(repo.root, { force: true });
   if (res.mode === "failed") return `CodeMap: failed — ${res.error ?? "unknown"}`;
 
-  await ensureWorkspace(repo.root);
-  await refreshOverlayNow(repo.root);
+  const wsOk = await ensureWorkspace(repo.root);
+  const refresh = await refreshOverlayNow(repo.root);
 
   const seconds = Math.round(res.elapsedMs / 100) / 10;
-  return `CodeMap: ${res.mode}, ${seconds}s, ${res.symbols} symbols, sha=${res.sha.slice(0, 8)}, ws=${res.workspaceId}`;
+  const lines = [
+    `CodeMap: ${res.mode}, ${seconds}s, ${res.symbols} symbols, sha=${res.sha.slice(0, 8)}, ws=${res.workspaceId}`,
+  ];
+  if (!wsOk) lines.push("workspace: 创建失败（可能被其他 CodeMap 进程占用），可稍后重试");
+  if (!refresh.ok) lines.push(`overlay: 刷新失败 — ${refresh.error ?? "unknown"}`);
+  return lines.join("\n");
 }
 
 export function codemapOnSessionStart(dir: string): void {
@@ -426,27 +411,11 @@ export function codemapOnSessionStart(dir: string): void {
       if (!repo) return;
       const res = await runEnsure(repo.root);
       if (res.mode === "failed") return;
-      await ensureWorkspace(repo.root);
       await cleanupIfNeeded(repo.root);
     } catch {
       /* 静默 */
     }
   })();
-}
-
-export function codemapOnCsEdited(file: string, fallbackDir: string): void {
-  try {
-    if (!loadState().codemapIndex) return;
-    if (!/\.cs$/i.test(file)) return;
-    if (!resolveCodemapExe()) return;
-    const base = fallbackDir || dirname(file);
-    const root = normalizeRepoRoot(base);
-    const repo = detectDotnetRepo(root);
-    if (!repo) return;
-    scheduleOverlayRefresh(repo.root, [file]);
-  } catch {
-    /* 静默 */
-  }
 }
 
 export function codemapOnBuildSuccess(cmd: string, outputText: string, exitCode: number | undefined, fallbackDir: string): void {
@@ -468,8 +437,7 @@ export function codemapOnBuildSuccess(cmd: string, outputText: string, exitCode:
       try {
         const res = await runEnsure(repo.root);
         if (res.mode === "failed") return;
-        await ensureWorkspace(repo.root);
-        await refreshOverlayNow(repo.root);
+        await cleanupIfNeeded(repo.root);
       } catch {
         /* 静默 */
       }

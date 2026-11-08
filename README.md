@@ -203,28 +203,38 @@ warning: in the working copy of 'foo.ts', LF will be replaced by CRLF the next t
 
 | 时机 | 动作 |
 |------|------|
-| 会话开始（`session.created`） | 幂等 `ensure_baseline`（已索引秒回）+ `workspace.create` |
-| `dotnet build` 成功 | 强制重建索引（优先于其他时机） |
-| 编辑 `.cs` 文件 | 5s 防抖后 `refresh_overlay` |
+| 会话开始（`session.created`） | 幂等 `ensure_baseline`（已索引秒回）+ 磁盘清理检查 |
+| `dotnet build` 成功 | 幂等 `ensure_baseline`（已索引秒回） |
+| 编辑 `.cs` 文件 | **不再自动刷新 overlay**（overlay 由 Agent 侧 codemap MCP 维护，避免跨进程写同一 `overlay.wal`） |
 | `~/.codemap` >1GB | 间隔 ≥24h 清理旧 baseline（keep_count=3 / 14 天，freed ≥100MB 才实删） |
 
 - 仅 `.slnx/.sln/.csproj` 仓库触发，非 .NET 项目零开销
-- 成功 log 一行（repo / elapsed / 符号数）；失败静默，连续失败 ≥3 次才一次性提醒
+- 成功 log 一行（repo / elapsed / 符号数）；失败静默 + 5 分钟节流日志，连续失败 ≥3 次才一次性提醒
+- 命令 `/codemap-index`：无参数=重建 baseline + 创建 workspace + 刷新 overlay（撞锁自动退避重试），`status`=索引状态，`cleanup`=清理旧 baseline
 - 开关 `codemapIndex`（默认 ON）：`/shellfix codemap` 或 palette `shellfix.codemap`；palette `shellfix.codemap-run` 立即重建
-- 命令 `/codemap-index [status|cleanup]`：无参数=重建并刷新，`status`=索引状态，`cleanup`=清理旧 baseline
 - 底层直连 `codemap-mcp.exe`（stdio JSON-RPC），零运行时依赖；`SHELLFIX_CODEMAP_MCP` 可指定可执行文件路径
 
 ---
 
-### ⑥ 调试提示 — toast + 计数（v2.3.1）
+### ⑥ 调试提示 — toast + 计数（v2.3.1 / 四色统一 v2.3.2）
 
 调试期「静默失败」场景的通用提示通道：统一 toast 提示 + 跨会话计数，带总开关：
 
 | 场景 | 触发 | 提示内容 |
 |------|------|----------|
 | 思考截断 | `session.idle` 检测到末条回复「无正文 + 思考断尾」 | toast「思考截断」（红）+ 计数 |
-| codemap 未建索引 | 调用 `codemap_*` 工具报 `repo_path is required` 等 | toast「CodeMap 未建索引」+ 指引（ensure_baseline / /codemap-index）+ 计数 |
+| codemap 未建索引 | 调用 `codemap_*` 工具报 `repo_path is required` 等 | toast「CodeMap 未建索引」（橙）+ 指引（ensure_baseline / /codemap-index）+ 计数 |
 
+**toast 四色（v2.3.2 全量统一）**——TUI 侧与服务端侧同色语义：
+
+| 颜色 | variant | 语义 | 示例 |
+|------|---------|------|------|
+| 蓝 | `info` | 中性信息 | 列表为空、无副作用提示 |
+| 绿 | `success` | 操作成功 | 已保存 / 已删除 / 开关切换 / 已发送模板 |
+| 橙 | `warning` | 缺失或受阻 | 不存在 / 参数无效 / 内容为空 / 稍后重试 |
+| 红 | `error` | 失败 | 渲染失败 / 保存失败 / 异常 |
+
+- **不再有「填入输入框」的输出**：模板执行改为直接发送消息 + 绿色 toast 提示（v2.3.2）
 - 总开关 `alertToasts`（默认 ON）：`palette shellfix.alerts` 或 `/shellfix alerts` 切换；**关闭后 toast 不弹、计数仍累计**（`alertCounts` 持久化 state.json）
 - 计数 key：`think-cut` / `codemap-no-index`（跨会话累计，toast 文案带「(累计 N 次)」）
 - 节流：同场景 5 分钟最多 1 条 toast，防连续工具调用刷屏
@@ -272,7 +282,7 @@ warning: in the working copy of 'foo.ts', LF will be replaced by CRLF the next t
 ```
 /my ?                       → 列出所有模板
 /my ? <name>                → 预览模板内容
-/my <name> [args...]        → 执行模板（填入输入框）
+/my <name> [args...]        → 执行模板（直接发送 + 绿色 toast 提示）
 /my save <name> <content>   → 保存模板
 /my rm <name>               → 删除模板
 /my show <name>             → 查看模板原始内容
@@ -290,7 +300,7 @@ warning: in the working copy of 'foo.ts', LF will be replaced by CRLF the next t
 ```
 /note ?                     → 列出所有顶层标签
 /note ? <prefix>            → 浏览标签树
-/note #tag#                 → 注入笔记内容到输入框
+/note #tag#                 → 注入笔记内容到对话（直接发送）
 /note #tag#:<content>       → 保存笔记
 /note #tag#:last            → 保存上一条消息
 /note rm #tag#              → 删除笔记

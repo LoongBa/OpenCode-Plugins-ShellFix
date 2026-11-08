@@ -1,5 +1,25 @@
 # Changelog
 
+## v2.3.2 (2026-11-08)
+
+### 修复 — CodeMap overlay 跨进程锁冲突
+
+- **自动路径退出 overlay 写路径**：编辑 `.cs` 不再触发 `refresh_overlay`（删除 `file.edited` 分支、`scheduleOverlayRefresh` / `flushOverlayRefresh`）；overlay 与 workspace 归 Agent 侧 codemap MCP 维护
+- **根因**：workspace id 全局常量 `session` + overlay 路径 `~/.codemap/store/overlays/<ws>/` 不带仓库维度 → opencode 自带 `mcp.codemap` 与 ShellFix spawn 的进程同写 `overlay.wal` → `IOException: being used by another process` → `Workspace 'session' not found`
+- **收窄可恢复正则**：`/timeout|exited|spawn failed|EPIPE|not found/i` → `/spawn failed|exited code=|codemap-mcp exited|EPIPE|timeout \d+ms/i`；workspace 业务错误不再白杀进程重试
+- **锁冲突退避重试**：新增 `CodemapSession.callWithRetry()`（300ms / 1.2s / 3s），仅 `/codemap-index` 显式路径使用；`workspace.create` 重试 2 次
+- **错误可读化**：`NOT FOUND: Workspace 'x' not found` → 「工作区 "x" 未创建（可能被其他 CodeMap 进程占用），稍后重试或执行 /codemap-index status」
+- **失败日志节流**：`ensure_baseline` 失败同仓库 5 分钟最多 1 条（原来每次编辑刷一行）
+- **显式命令保留完整能力**：`/codemap-index` 仍执行 重建 baseline → 创建 workspace → 刷新 overlay，失败项逐条显示
+
+### 变更 — 输出通道统一为 toast 四色
+
+- **不再有「填入输入框」的输出**：`/my <name>` 与 palette 模板执行改为 `appendPrompt` + `submitPrompt` **直接发送** + 绿色 toast「已发送 模板 "x"」
+- **两侧四色统一**：TUI 侧 `api.ui.toast({ message, variant })`、服务端侧 `client.tui.showToast({ body: { variant } })`
+  - 蓝 `info` = 中性信息；绿 `success` = 操作成功；橙 `warning` = 缺失/受阻；红 `error` = 失败
+- **全量标注**：TUI 侧约 65 处通知（`DispatchResult.toast` + 直接 `api.ui.toast`）逐条按语义加 `variant`，所有 `catch` 分支统一红色
+- **面板保留**：多行列表/状态面板（`/my ?`、`/auto`、`/shellfix doctor`）仍用 DialogAlert 可滚动阅读
+
 ## v2.3.1 (2026-11-07)
 
 ### 新功能 — 通用调试提示（toast + 计数）

@@ -23,6 +23,13 @@ export const ENSURE_TIMEOUT_MS = 180_000;
 const IDLE_CLOSE_MS = 5 * 60_000;
 const MCP_PROTOCOL_VERSION = "2024-11-05";
 
+/** 进程级故障才重启（workspace not found 等业务错误不重启） */
+const RECOVERABLE_RE = /spawn failed|exited code=|codemap-mcp exited|EPIPE|timeout \d+ms/i;
+/** overlay.wal 被其他 CodeMap 进程占用（跨进程锁冲突） */
+const LOCK_CONFLICT_RE = /overlay\.wal|being used by another process|EBUSY|IOException/i;
+/** codemap 的 workspace 未创建错误 */
+const WORKSPACE_NOT_FOUND_RE = /NOT FOUND[\s\S]*?Workspace '([^']+)' not found/i;
+
 type Pending = {
   resolve: (r: McpResult) => void;
   timer: ReturnType<typeof setTimeout>;
@@ -80,6 +87,15 @@ function textOf(result: any): string {
     .join("\n");
 }
 
+/** 规范化 codemap 错误文本：workspace 未创建给出可操作提示 */
+function normalizeError(raw: string): string {
+  const m = WORKSPACE_NOT_FOUND_RE.exec(raw);
+  if (m) {
+    return `工作区 "${m[1]}" 未创建（可能被其他 CodeMap 进程占用），稍后重试或执行 /codemap-index status`;
+  }
+  return raw;
+}
+
 export class CodemapSession {
   private child: ReturnType<typeof spawn> | null = null;
   private buf = "";
@@ -100,6 +116,29 @@ export class CodemapSession {
     const p = this.queue.then(run, run);
     this.queue = p.then(() => undefined, () => undefined);
     return p;
+  }
+
+  /**
+   * 带锁冲突退避重试的调用（仅供显式刷新等一次性路径使用）。
+   * overlay.wal 被其他 CodeMap 进程占用时退避重试，避免一次性失败。
+   */
+  async callWithRetry(
+    name: string,
+    args: Record<string, unknown>,
+    opts: { attempts?: number; backoffMs?: number[]; timeoutMs?: number } = {},
+  ): Promise<McpResult> {
+    const attempts = opts.attempts ?? 3;
+    const backoff = opts.backoffMs ?? [300, 1200, 3000];
+    let res: McpResult = { ok: false, error: "not attempted" };
+    for (let i = 0; i < attempts; i++) {
+      res = await this.call(name, args, opts.timeoutMs ?? DEFAULT_CALL_TIMEOUT_MS);
+      if (res.ok) return res;
+      if (!LOCK_CONFLICT_RE.test(res.error ?? "")) return res;
+      if (i < attempts - 1) {
+        await new Promise((r) => setTimeout(r, backoff[Math.min(i, backoff.length - 1)]));
+      }
+    }
+    return res;
   }
 
   close(): void {
@@ -126,7 +165,7 @@ export class CodemapSession {
       return res;
     }
 
-    const recoverable = /timeout|exited|spawn failed|EPIPE|not found/i.test(res.error ?? "");
+    const recoverable = RECOVERABLE_RE.test(res.error ?? "");
     if (!recoverable || this.restartUsed) return res;
 
     this.restartUsed = true;
@@ -193,7 +232,7 @@ export class CodemapSession {
       if (!r.ok) return r;
       const result = r.data;
       if (result?.isError === true) {
-        return { ok: false, error: textOf(result) || "tool error" };
+        return { ok: false, error: normalizeError(textOf(result) || "tool error") };
       }
       const text = textOf(result);
       let data: any = text;
