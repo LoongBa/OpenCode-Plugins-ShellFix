@@ -1,5 +1,15 @@
 # Changelog
 
+## v2.3.4 (2026-11-08)
+
+### 变更 — 发布渠道迁移到 `@tkwf/opencode-shellfix`
+
+- **包名**：`opencode-shellfix` → **`@tkwf/opencode-shellfix`**（功能零变更）
+- **原因**：原包 owner 账号 `loongba` 的注册邮箱为 GitHub noreply 地址（不收信），无法登录/重签 token → npm 发布持续 `E403`；npm 权限规则下非 scoped 包无法转入 `tkwf` org，故新建 scoped 包发布
+- **安装命令**：`opencode plugin @tkwf/opencode-shellfix`；`opencode.json` 中为 `"plugin": ["@tkwf/opencode-shellfix"]`
+- **旧包状态**：`opencode-shellfix` 停在 **2.2.12**，待账号恢复后标记 `deprecated` 指向新包
+- `package.json` 补 `repository` 字段（npm 页面可跳转 GitHub）
+
 ## v2.3.3 (2026-11-08)
 
 ### 修复 — 插件日志污染 TUI 输入框（红字）

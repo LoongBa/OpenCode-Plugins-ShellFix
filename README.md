@@ -2,7 +2,7 @@
 
 **Windows PowerShell 三大修复 + 七命令体系**
 
-当前版本：**v2.3.3**
+当前版本：**v2.3.4**
 
 ---
 
@@ -396,16 +396,18 @@ warning: in the working copy of 'foo.ts', LF will be replaced by CRLF the next t
 
 ```bash
 # 安装（自动加载，重启生效）
-opencode plugin opencode-shellfix
+opencode plugin @tkwf/opencode-shellfix
 ```
 
 或在 `~/.config/opencode/opencode.json` 中手动添加：
 
 ```json
 {
-  "plugin": ["opencode-shellfix"]
+  "plugin": ["@tkwf/opencode-shellfix"]
 }
 ```
+
+> **发布渠道迁移（v2.3.4）**：原包 `opencode-shellfix` 停在 **2.2.12**（旧 npm 账号邮箱不可达，无法继续发布），后续版本统一发布到 **`@tkwf/opencode-shellfix`**。旧包在账号恢复后会标记 `deprecated` 指向新包，请改用新包名。
 
 > 需 TUI 调度器（palette 入口、事件订阅）？npm 包仅包含核心插件（`shell-fix.ts`）。完整体验请额外部署 TUI 文件（见方式二）。
 
