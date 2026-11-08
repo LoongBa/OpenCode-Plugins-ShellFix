@@ -10,7 +10,9 @@
 
 实现完成，静态检查通过（改动文件 LSP 零 error；`npm pack --dry-run` 包名/版本/内容均正确）。**已部署到本地环境**（9 个文件哈希全部一致，`PLUGIN_VERSION=2.3.4`，备份 `.bak\20261108_155505_*`）。
 
-npm 侧已具备发布条件：本地 `npm whoami` = **`coffeedrunk`**，`npm org ls tkwf` = **`coffeedrunk - owner`**；包名 `@tkwf/opencode-shellfix` 在 registry 返回 404（未被占用）。发布动作待用户确认提交后执行。
+npm 侧已具备发布条件：本地 `npm whoami` = **`coffeedrunk`**，`npm org ls tkwf` = **`coffeedrunk - owner`**；包名 `@tkwf/opencode-shellfix` 在 registry 返回 404（未被占用）。
+
+**发布已完成**（commit `617057f` → tag `V2.3.4` → CI run `42460850095` 全绿）：npm 上 `@tkwf/opencode-shellfix@2.3.4` 已上线（`latest`），GitHub Release `V2.3.4` = Latest。详见 §七。
 
 ---
 
@@ -44,12 +46,12 @@ npm 侧已具备发布条件：本地 `npm whoami` = **`coffeedrunk`**，`npm or
 | # | 用例 | 状态 | 说明 |
 |---|------|------|------|
 | 1 | `npm pack --dry-run` | ✅ | `@tkwf/opencode-shellfix@2.3.4`，11 文件 / 64.4 kB（含 `src/lib/log-file.ts`） |
-| 2 | `npm view @tkwf/opencode-shellfix version` | ⏳ | 待发布后验证 |
-| 3 | `opencode plugin @tkwf/opencode-shellfix` | ⏳ | 待发布后实机验证（scoped 名兼容性，方案唯一技术不确定点） |
+| 2 | `npm view @tkwf/opencode-shellfix version` | ✅ | 返回 `2.3.4`；`dist-tags.latest = 2.3.4` |
+| 3 | `opencode plugin @tkwf/opencode-shellfix` | ⏳ | 未在本机执行（本机已手动部署，装 npm 包会双重加载）；其他机器可直接用 |
 | 4 | 重启后版本号 / 状态面板 | ✅（部署） | 部署版 `PLUGIN_VERSION = "2.3.4"`；重启后生效 |
 | 5 | 功能回归（编码 / export / git 免交互） | ⏳ | 逻辑零改动，重启后抽验 |
 | 6 | 输入框无插件红字（v2.3.3 回归） | ⏳ | 重启后确认 + `shellfix.log` 正常写入 |
-| 7 | 空目录 `npm install @tkwf/opencode-shellfix` | ⏳ | 待发布后验证 |
+| 7 | 空目录 `npm install @tkwf/opencode-shellfix` | ✅ | `added 1 package`，11 个文件（含 `src/lib/log-file.ts`） |
 
 ---
 
@@ -69,16 +71,52 @@ npm 侧已具备发布条件：本地 `npm whoami` = **`coffeedrunk`**，`npm or
 
 | 项 | 说明 |
 |----|------|
-| scoped 名安装兼容性 | `opencode plugin` 的 positional 定义为「npm module name」，理论直通；若实机失败，退化为 `opencode.json` 手写 `"plugin": ["@tkwf/opencode-shellfix"]` |
+| scoped 名安装兼容性 | `npm install` 已验证通过；`opencode plugin @tkwf/opencode-shellfix` 未在本机执行（本机已手动部署，避免双重加载），留给其他机器首用验证 |
 | 历史版本缺口 | npm 上 `@tkwf/opencode-shellfix` 从 2.3.4 起算，2.3.0~2.3.3 只存在于 GitHub Release |
 | 旧包用户 | `opencode-shellfix` 停在 2.2.12，无自动升级路径；靠 README + 后续 deprecate 引导 |
-| CI secret | 已由用户更新为 tkwf 账号 token；若后续换 token 需同步 |
-| 实机验证 | 用例 2/3/5/6/7 需重启 + 发布后确认 |
+| CI secret | 已验证为 tkwf 账号（`coffeedrunk`）token：发布日志 `_npmUser: coffeedrunk`，无需再改 |
+| 实机验证 | 用例 3/5/6 需重启 OpenCode 后确认 |
 
 ---
 
-## 七、待确认
+## 七、发布结果（2026-11-08）
 
-1. 提交信息建议：`chore: v2.3.4 发布渠道迁移到 @tkwf/opencode-shellfix`
-2. 提交后执行：本地 `npm publish --access public` 首发 → 验证 `npm view` + `opencode plugin` → 打 tag `V2.3.4` 触发 CI 发布
-3. 是否同意提交（AGENTS.md 要求用户明确确认后才能 commit）
+| 项 | 结果 |
+|----|------|
+| commit | `617057f` `chore: v2.3.4 发布渠道迁移到 @tkwf/opencode-shellfix` |
+| tag | `V2.3.4`（指向 `617057f`） |
+| CI run | `42460850095` — **success**（`release` ✅ / `publish-npm` ✅，11s） |
+| npm | `@tkwf/opencode-shellfix@2.3.4`，`dist-tags.latest = 2.3.4`，`_npmUser: coffeedrunk` |
+| tarball | 64.4 kB / 11 files，`shasum 38a9991…`（与本地 `npm pack --dry-run` 一致） |
+| GitHub Release | `V2.3.4` = **Latest** |
+| 安装验证 | 空目录 `npm install @tkwf/opencode-shellfix` → `added 1 package`，11 文件 |
+
+### 发布过程中的一次「假失败」
+
+CI 发布成功（日志 `+ @tkwf/opencode-shellfix@2.3.4`）后，`npm view` / `npm install` 仍返回 **404** 约 4~5 分钟。原因不是权限：
+
+- npm 提示 `Your package is being processed and may take a few minutes to become available.`
+- registry 中可查到占位版本 `0.0.0-stage` —— 发布处理中的标志
+- 该窗口内：`/@tkwf%2fopencode-shellfix/2.3.4` 与 tarball 均 **200**，但根 packument 仍 **404**（npm CLI 走的正是根 packument）
+- 约 5 分钟后 packument 生效，`npm view` 立即返回 `2.3.4`
+
+> 结论：**npm 没有「手动创建包」这一步**，`npm publish` 即创建；新包首发后遇到短暂 404 属正常异步处理，不要重复发布（同版本重发会 `EPUBLISHCONFLICT`）。
+
+### 后续发布方式（已确定）
+
+打 tag 即自动发布，无需本地 `npm publish`：
+
+```
+改版本号 → 方案/审核 → commit → git tag V{x.y.z} → git push origin V{x.y.z}
+→ CI: release（GitHub Release）+ publish-npm（npm publish）
+→ 验证 npm view @tkwf/opencode-shellfix version
+→ 本地 deploy.ps1 部署
+```
+
+---
+
+## 八、待确认
+
+1. 重启 OpenCode 后验证 §四 用例 3/5/6（重点：输入框不再出现红字、版本号 2.3.4）。
+2. 本次审核报告更新（发布结果）是否随下一次改动一并提交。
+3. 旧包 deprecate 待 `loongba` 账号恢复后执行。

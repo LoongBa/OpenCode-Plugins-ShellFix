@@ -1,7 +1,7 @@
 # 工作流程
 
 > 项目：OpenCode-Plugins-ShellFix
-> 插件名：opencode-shellfix（npm）
+> 插件名：opencode-shellfix（npm 包：**`@tkwf/opencode-shellfix`**，v2.3.4 起）
 
 ---
 
@@ -40,6 +40,10 @@
 - tag 格式：`V{ver}`（如 `V2.2.11`）
 - tag 自动触发：GitHub Release + npm 发布（`publish.yml`）
 - **tag 后立即部署到本地**：将源码复制到 `~/.config/opencode/plugins/`（含 `lib/` 子目录），确保本地环境立即使用新版本
+- 发布 SOP、检查清单、故障排查与历史事故复盘 → [`docs/06-发布流程与经验.md`](docs/06-发布流程与经验.md)
+  - npm 包：`@tkwf/opencode-shellfix`（org `tkwf`，账号 `coffeedrunk`）
+  - 发布只走 CI（push tag），本地只做 `npm pack --dry-run` 校验
+  - 新包首发后 4~5 分钟内 `npm view` 报 404 属正常异步处理，**不要重发**
 
 ---
 
